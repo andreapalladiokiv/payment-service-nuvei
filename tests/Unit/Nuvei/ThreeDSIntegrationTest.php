@@ -42,6 +42,7 @@ function threeDSNuveiRefResolver(string $ref): GatewayInstrumentRepository
 {
     $mock = Mockery::mock(GatewayInstrumentRepository::class);
     $mock->shouldReceive('find')->andReturn($ref);
+    $mock->shouldReceive('findMetadata')->andReturn([]);
 
     return $mock;
 }

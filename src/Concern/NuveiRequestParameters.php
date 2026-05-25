@@ -62,6 +62,16 @@ trait NuveiRequestParameters
         return $this->setParameter('secretKey', $v);
     }
 
+    public function setStatementDescription(?string $v): self
+    {
+        return $this->setParameter('statementDescription', $v);
+    }
+
+    public function getStatementDescription(): ?string
+    {
+        return $this->getParameter('statementDescription');
+    }
+
     protected function formatMoney(Money $money): string
     {
         return (new DecimalMoneyFormatter(new ISOCurrencies))->format($money);
@@ -76,8 +86,10 @@ trait NuveiRequestParameters
         return array_filter([
             'firstName' => $address->firstName,
             'lastName' => $address->lastName,
-            'email' => (string) $address->email,
+            'email' => $address->email ? (string) $address->email : null,
+            'phone' => $address->phone ? (string) $address->phone : null,
             'address' => $address->line,
+            'addressLine2' => $address->lineExtra !== '' ? $address->lineExtra : null,
             'city' => $address->city,
             'country' => (string) $address->country,
             'zip' => $address->postalCode,

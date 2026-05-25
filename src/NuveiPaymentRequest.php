@@ -83,6 +83,11 @@ abstract class NuveiPaymentRequest extends AbstractRequest implements PaymentIns
             $data['settleType'] = $settleType;
         }
 
+        $statementDescription = $this->getStatementDescription();
+        if ($statementDescription !== null && $statementDescription !== '') {
+            $data['dynamicDescriptor'] = ['merchantName' => $statementDescription];
+        }
+
         return $data;
     }
 

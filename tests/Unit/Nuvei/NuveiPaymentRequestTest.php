@@ -53,10 +53,11 @@ function nuveiCredential(): GatewayCredential
     };
 }
 
-function nuveiRefResolver(string $ref): GatewayInstrumentRepository
+function nuveiRefResolver(string $ref, array $metadata = []): GatewayInstrumentRepository
 {
     $mock = Mockery::mock(GatewayInstrumentRepository::class);
     $mock->shouldReceive('find')->andReturn($ref);
+    $mock->shouldReceive('findMetadata')->andReturn($metadata);
 
     return $mock;
 }
@@ -98,6 +99,48 @@ it('builds purchase data for token with ccTempToken', function () {
         ->and($data['paymentOption']['card']['ccTempToken'])->toBe('temp_token_abc')
         ->and($data)->toHaveKey('deviceDetails')
         ->and($data)->toHaveKey('clientRequestId');
+});
+
+it('includes dynamicDescriptor.merchantName when statementDescription is set', function () {
+    $token = new Token(
+        TokenId::generate(),
+        nuveiTestCard(),
+        ExpiresAt::fromDateTime(new DateTimeImmutable('+1 hour')),
+    );
+
+    $request = new PurchaseRequest(new OmnipayClient, new HttpRequest);
+    $request->initialize([
+        'money' => new Money(2500, new Currency('USD')),
+        'instrument' => $token,
+        'gateway' => nuveiCredential(),
+        'decrypter' => Mockery::mock(DecryptInterface::class),
+        'referenceResolver' => nuveiRefResolver('temp_token_abc'),
+        'sessionToken' => 'sess_123',
+        'statementDescription' => 'ACME Trip 42',
+    ]);
+
+    expect($request->getData()['dynamicDescriptor'])->toBe(['merchantName' => 'ACME Trip 42']);
+});
+
+it('omits dynamicDescriptor when statementDescription is null or empty', function () {
+    $token = new Token(
+        TokenId::generate(),
+        nuveiTestCard(),
+        ExpiresAt::fromDateTime(new DateTimeImmutable('+1 hour')),
+    );
+
+    $request = new PurchaseRequest(new OmnipayClient, new HttpRequest);
+    $request->initialize([
+        'money' => new Money(2500, new Currency('USD')),
+        'instrument' => $token,
+        'gateway' => nuveiCredential(),
+        'decrypter' => Mockery::mock(DecryptInterface::class),
+        'referenceResolver' => nuveiRefResolver('temp_token_abc'),
+        'sessionToken' => 'sess_123',
+        'statementDescription' => '',
+    ]);
+
+    expect($request->getData())->not->toHaveKey('dynamicDescriptor');
 });
 
 it('builds purchase data for payment method with UPO and storedCredentials', function () {
