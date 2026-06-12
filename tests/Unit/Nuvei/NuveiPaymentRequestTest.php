@@ -143,6 +143,49 @@ it('omits dynamicDescriptor when statementDescription is null or empty', functio
     expect($request->getData())->not->toHaveKey('dynamicDescriptor');
 });
 
+it('omits userTokenId when no customer reference is resolved', function () {
+    $token = new Token(
+        TokenId::generate(),
+        nuveiTestCard(),
+        ExpiresAt::fromDateTime(new DateTimeImmutable('+1 hour')),
+    );
+
+    $request = new PurchaseRequest(new OmnipayClient, new HttpRequest);
+    $request->initialize([
+        'money' => new Money(2500, new Currency('USD')),
+        'instrument' => $token,
+        'gateway' => nuveiCredential(),
+        'decrypter' => Mockery::mock(DecryptInterface::class),
+        'referenceResolver' => nuveiRefResolver('temp_token_abc'),
+        'sessionToken' => 'sess_123',
+        'customerReference' => '',
+    ]);
+
+    expect($request->getData())->not->toHaveKey('userTokenId');
+});
+
+it('uses one id for clientUniqueId and clientRequestId even when generated', function () {
+    $token = new Token(
+        TokenId::generate(),
+        nuveiTestCard(),
+        ExpiresAt::fromDateTime(new DateTimeImmutable('+1 hour')),
+    );
+
+    $request = new PurchaseRequest(new OmnipayClient, new HttpRequest);
+    $request->initialize([
+        'money' => new Money(2500, new Currency('USD')),
+        'instrument' => $token,
+        'gateway' => nuveiCredential(),
+        'decrypter' => Mockery::mock(DecryptInterface::class),
+        'referenceResolver' => nuveiRefResolver('temp_token_abc'),
+        'sessionToken' => 'sess_123',
+    ]);
+
+    $data = $request->getData();
+
+    expect($data['clientUniqueId'])->toBe($data['clientRequestId']);
+});
+
 it('builds purchase data for payment method with UPO and storedCredentials', function () {
     $pm = new PaymentMethod(
         PaymentMethodId::generate(),

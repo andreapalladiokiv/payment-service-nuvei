@@ -264,8 +264,12 @@ final class NuveiGateway extends AbstractGateway implements Gateway
 
         $gatewayId = $gateway->getId();
 
+        // An empty-string link counts as missing: legacy rows exist where
+        // `customer_reference` was written as '', and an empty `userTokenId`
+        // makes Nuvei reject any payment that references a stored
+        // userPaymentOptionId.
         $existing = $this->customerRepository->findByInstrument($gatewayId, $instrument);
-        if ($existing !== null) {
+        if ($existing !== null && $existing !== '') {
             return $existing;
         }
 

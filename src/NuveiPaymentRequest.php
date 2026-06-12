@@ -65,18 +65,31 @@ abstract class NuveiPaymentRequest extends AbstractRequest implements PaymentIns
         /** @var Money $money */
         $money = $this->getParameter('money');
 
+        // One id for both fields: with two independent fallback UUIDs a
+        // retried request can't be correlated (or deduplicated) by Nuvei.
+        $clientUniqueId = $this->getParameter('clientUniqueId') ?? Uuid::uuid4()->toString();
+
         $data = [
             'sessionToken' => $this->getParameter('sessionToken'),
-            'clientRequestId' => $this->getParameter('clientUniqueId') ?? Uuid::uuid4()->toString(),
-            'clientUniqueId' => $this->getParameter('clientUniqueId') ?? Uuid::uuid4()->toString(),
+            'clientRequestId' => $clientUniqueId,
+            'clientUniqueId' => $clientUniqueId,
             'amount' => $this->formatMoney($money),
             'currency' => $money->getCurrency()->getCode(),
-            'userTokenId' => $this->getCustomerReference(),
             'paymentOption' => $paymentOption,
             'transactionType' => $this->transactionType(),
             'deviceDetails' => ['ipAddress' => $this->getParameter('clientIp') ?? '127.0.0.1'],
             'billingAddress' => $this->formatBillingAddress($this->getParameter('billingAddress')),
         ];
+
+        // Omit, don't send '': Nuvei rejects an empty userTokenId outright,
+        // while a payment without one is valid for non-stored instruments.
+        // Stored userPaymentOptionIds still require the owning user — the
+        // gateway resolves it via CustomerRepository before building this
+        // request.
+        $userTokenId = $this->getCustomerReference();
+        if ($userTokenId !== '') {
+            $data['userTokenId'] = $userTokenId;
+        }
 
         $settleType = $this->settleType();
         if ($settleType !== null) {
