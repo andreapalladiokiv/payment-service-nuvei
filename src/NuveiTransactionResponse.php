@@ -4,14 +4,19 @@ declare(strict_types=1);
 
 namespace Techork\PaymentService\Nuvei;
 
+use Money\Currencies\ISOCurrencies;
+use Money\Currency;
+use Money\Money;
+use Money\Parser\DecimalMoneyParser;
 use Omnipay\Common\Message\AbstractResponse;
 use Techork\PaymentService\Common\Contract\Challenge;
 use Techork\PaymentService\Common\ValueObject\Challenge\ThreeDSChallenge;
 use Techork\PaymentService\Common\ValueObject\CreditCard\CheckResult;
 use Techork\PaymentService\Gateway\Contract\CardChecksProvider;
 use Techork\PaymentService\Gateway\Contract\ChallengeProvider;
+use Techork\PaymentService\Gateway\Contract\ConvertedAmountProvider;
 
-class NuveiTransactionResponse extends AbstractResponse implements CardChecksProvider, ChallengeProvider
+class NuveiTransactionResponse extends AbstractResponse implements CardChecksProvider, ChallengeProvider, ConvertedAmountProvider
 {
     public function isSuccessful(): bool
     {
@@ -37,6 +42,30 @@ class NuveiTransactionResponse extends AbstractResponse implements CardChecksPro
         return isset($this->data['errCode']) && $this->data['errCode'] !== '0'
             ? "Error code: {$this->data['errCode']}"
             : null;
+    }
+
+    /**
+     * FX-settled amount from Nuvei's DCC/MCP `currencyConversion` block, present
+     * only when the transaction crossed a currency boundary (the cardholder
+     * converted on the payment page or DCC was applied). Nuvei reports amounts
+     * as decimal strings, so parse against the converted currency's ISO scale.
+     * Null when no conversion block is present.
+     */
+    public function getConvertedAmount(): ?Money
+    {
+        $conversion = $this->data['currencyConversion'] ?? null;
+        if (! is_array($conversion)) {
+            return null;
+        }
+
+        $amount = $conversion['convertedAmount'] ?? null;
+        $currency = $conversion['convertedCurrency'] ?? null;
+        if ($amount === null || $amount === '' || $currency === null || $currency === '') {
+            return null;
+        }
+
+        return (new DecimalMoneyParser(new ISOCurrencies()))
+            ->parse((string) $amount, new Currency((string) $currency));
     }
 
     public function getChallenge(): ?Challenge

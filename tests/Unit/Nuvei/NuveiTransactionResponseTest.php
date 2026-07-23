@@ -2,9 +2,12 @@
 
 declare(strict_types=1);
 
+use Money\Currency;
+use Money\Money;
 use Omnipay\Common\Message\RequestInterface;
 use Techork\PaymentService\Common\ValueObject\CreditCard\CheckResult;
 use Techork\PaymentService\Gateway\Contract\CardChecksProvider;
+use Techork\PaymentService\Gateway\Contract\ConvertedAmountProvider;
 use Techork\PaymentService\Nuvei\NuveiTransactionResponse;
 
 function makeNuveiResponse(array $data): NuveiTransactionResponse
@@ -71,4 +74,42 @@ it('returns null for cvc when cvv2Reply is empty string', function () {
     ]);
 
     expect($response->getCvcCheck())->toBeNull();
+});
+
+it('implements ConvertedAmountProvider', function () {
+    expect(makeNuveiResponse([]))->toBeInstanceOf(ConvertedAmountProvider::class);
+});
+
+it('parses the FX-settled amount from the DCC currencyConversion block', function () {
+    $response = makeNuveiResponse([
+        'status' => 'SUCCESS',
+        'transactionStatus' => 'APPROVED',
+        'transactionId' => '7110000000000000001',
+        'currencyConversion' => [
+            'convertedCurrency' => 'SGD',
+            'convertedAmount' => '76.09',
+            'originalAmount' => '50.00',
+            'originalCurrencyCode' => 'USD',
+            'rate' => '1.52181',
+        ],
+    ]);
+
+    expect($response->getConvertedAmount())->toEqual(new Money(7609, new Currency('SGD')));
+});
+
+it('returns null convertedAmount when no currencyConversion block is present', function () {
+    $response = makeNuveiResponse([
+        'status' => 'SUCCESS',
+        'transactionStatus' => 'APPROVED',
+        'transactionId' => '7110000000000000002',
+    ]);
+
+    expect($response->getConvertedAmount())->toBeNull();
+});
+
+it('returns null convertedAmount when the conversion block lacks amount or currency', function () {
+    expect(makeNuveiResponse(['currencyConversion' => ['convertedCurrency' => 'SGD', 'convertedAmount' => '']])->getConvertedAmount())
+        ->toBeNull()
+        ->and(makeNuveiResponse(['currencyConversion' => ['convertedAmount' => '76.09']])->getConvertedAmount())
+        ->toBeNull();
 });
