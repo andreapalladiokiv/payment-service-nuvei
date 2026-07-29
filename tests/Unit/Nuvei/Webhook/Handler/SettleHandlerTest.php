@@ -27,7 +27,7 @@ it('delegates Settle APPROVED to GatewaySuccessRecorder', function () {
     $recorder = Mockery::mock(GatewaySuccessRecorder::class);
     $recorder->shouldReceive('onGatewaySuccess')
         ->once()
-        ->with($gatewayId, $piId, 'ppp_123', Mockery::on(fn (Money $m) => $m->getAmount() === '100' && $m->getCurrency()->getCode() === 'USD'))
+        ->with($gatewayId, $piId, 'ppp_123', Mockery::on(fn (Money $m) => $m->getAmount() === '10000' && $m->getCurrency()->getCode() === 'USD'))
         ->andReturn(RecorderOutcome::Applied);
 
     $feeRecorder = Mockery::mock(GatewayFeeRecorder::class);
@@ -98,7 +98,7 @@ it('forwards feeAmount to FeeRecorder when present and recorder Applied', functi
         ->withArgs(function (GatewayId $gid, string $pi, Money $fee, DateTimeImmutable $observedAt) use ($gatewayId, $piId) {
             return $gid->equals($gatewayId)
                 && $pi === $piId
-                && $fee->getAmount() === '35'
+                && $fee->getAmount() === '3500'
                 && $fee->getCurrency()->getCode() === 'USD';
         })
         ->andReturn(RecorderOutcome::Applied);

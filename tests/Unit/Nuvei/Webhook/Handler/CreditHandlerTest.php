@@ -22,7 +22,14 @@ it('delegates Credit APPROVED to RefundProcessingRecorder', function () {
     $resolver->shouldReceive('resolvePaymentIntent')->with($gatewayId, 'ppp_orig')->andReturn($piId);
 
     $processing = Mockery::mock(RefundProcessingRecorder::class);
-    $processing->shouldReceive('onRefundProcessed')->once()->andReturn(RecorderOutcome::Applied);
+    $processing->shouldReceive('onRefundProcessed')
+        ->once()
+        // '500' is $500.00: DMN amounts are major units, so the refund must be
+        // recorded as 50000 minor units, not 500.
+        ->with($gatewayId, $piId, 'ppp_refund', Mockery::on(
+            fn (Money $m) => $m->getAmount() === '50000' && $m->getCurrency()->getCode() === 'USD',
+        ))
+        ->andReturn(RecorderOutcome::Applied);
 
     $failure = Mockery::mock(RefundFailureRecorder::class);
     $feeRecorder = Mockery::mock(GatewayFeeRecorder::class);
@@ -123,7 +130,7 @@ it('forwards feeAmount to FeeRecorder when refund is APPROVED and resolveRefund 
         ->withArgs(function (GatewayId $gid, string $rid, Money $fee, DateTimeImmutable $observedAt) use ($gatewayId, $refundId) {
             return $gid->equals($gatewayId)
                 && $rid === $refundId
-                && $fee->getAmount() === '12'
+                && $fee->getAmount() === '1200'
                 && $fee->getCurrency()->getCode() === 'USD';
         })
         ->andReturn(RecorderOutcome::Applied);
@@ -163,6 +170,7 @@ it('skips fee forwarding when our refund id cannot be resolved (avoids creating 
         'relatedTransactionId' => 'ppp_orig',
         'totalAmount' => '500',
         'feeAmount' => '12',
+        'currency' => 'USD',
     ]);
 
     expect((new CreditHandler($resolver, $processing, Mockery::mock(RefundFailureRecorder::class), $feeRecorder))($event, $gatewayId))

@@ -36,6 +36,9 @@ it('records gateway success on APPROVED Sale DMN', function () {
         ->withArgs(function ($gatewayId, $piIdArg, $reference, Money $amount) use ($piId) {
             return $piIdArg === $piId
                 && $reference === 'ppp_abcdef'
+                // '10.50' is $10.50: DMN amounts are major units, so the
+                // recorded Money must be 1050 minor units, not 10.
+                && $amount->getAmount() === '1050'
                 && $amount->getCurrency()->getCode() === 'USD';
         })
         ->andReturn(RecorderOutcome::Applied);
@@ -43,6 +46,37 @@ it('records gateway success on APPROVED Sale DMN', function () {
     $handler = new SaleHandler($successRec, Mockery::mock(GatewayFailureRecorder::class));
 
     expect($handler($event, GatewayId::generate()))->toBe(HandlerOutcome::Processed);
+});
+
+it('parses the DMN amount against the currency ISO scale, not as minor units', function () {
+    $piId = Uuid::uuid4()->toString();
+    // JPY has no minor unit: '5000' is Y5,000 and stays 5000. Under a
+    // minor-unit reading USD '10.50' would collapse to 10 cents.
+    $event = saleEvent('APPROVED', $piId, ['totalAmount' => '5000', 'currency' => 'JPY']);
+
+    $successRec = Mockery::mock(GatewaySuccessRecorder::class);
+    $successRec->shouldReceive('onGatewaySuccess')
+        ->once()
+        ->withArgs(fn ($g, $p, $r, Money $amount) => $amount->getAmount() === '5000'
+            && $amount->getCurrency()->getCode() === 'JPY')
+        ->andReturn(RecorderOutcome::Applied);
+
+    $handler = new SaleHandler($successRec, Mockery::mock(GatewayFailureRecorder::class));
+
+    expect($handler($event, GatewayId::generate()))->toBe(HandlerOutcome::Processed);
+});
+
+it('refuses to book a DMN that names no currency instead of assuming USD', function () {
+    $piId = Uuid::uuid4()->toString();
+    $event = saleEvent('APPROVED', $piId, ['currency' => '']);
+
+    $successRec = Mockery::mock(GatewaySuccessRecorder::class);
+    $successRec->shouldNotReceive('onGatewaySuccess');
+
+    $handler = new SaleHandler($successRec, Mockery::mock(GatewayFailureRecorder::class));
+
+    expect(fn () => $handler($event, GatewayId::generate()))
+        ->toThrow(RuntimeException::class, 'names no currency');
 });
 
 it('records a failure on non-APPROVED Sale status', function () {

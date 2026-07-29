@@ -5,8 +5,6 @@ declare(strict_types=1);
 namespace Techork\PaymentService\Nuvei\Webhook\Handler;
 
 use DateTimeImmutable;
-use Money\Currency;
-use Money\Money;
 use Techork\PaymentService\Nuvei\Webhook\DTO\NuveiEvent;
 use Techork\PaymentService\Gateway\ValueObject\GatewayId;
 use Techork\PaymentService\Gateway\Webhook\Contract\HandlerOutcome;
@@ -47,8 +45,7 @@ final readonly class SettleHandler implements WebhookEventHandler
             return HandlerOutcome::Skipped;
         }
 
-        $currency = new Currency($event->currency() !== '' ? $event->currency() : 'USD');
-        $amount = new Money((int) $event->totalAmount(), $currency);
+        $amount = $event->totalMoney();
 
         $outcome = $this->recorder->onGatewaySuccess($gatewayId, $paymentIntentId, $event->pppTransactionId(), $amount);
         $handlerOutcome = match ($outcome) {
@@ -57,11 +54,8 @@ final readonly class SettleHandler implements WebhookEventHandler
             RecorderOutcome::NotFound => HandlerOutcome::Delay,
         };
 
-        if ($outcome === RecorderOutcome::Applied && $event->feeAmount() > 0) {
-            // Existing convention: Nuvei DMN reports amounts in this gateway
-            // already in smallest-unit form ((int)totalAmount above). Apply
-            // the same cast to fee so amount + fee are scale-consistent.
-            $fee = new Money((int) $event->feeAmount(), $currency);
+        $fee = $event->feeMoney();
+        if ($outcome === RecorderOutcome::Applied && $fee !== null) {
             $this->feeRecorder->onPaymentIntentFee($gatewayId, $paymentIntentId, $fee, new DateTimeImmutable);
         }
 

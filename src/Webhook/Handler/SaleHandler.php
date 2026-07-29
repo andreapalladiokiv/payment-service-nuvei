@@ -4,8 +4,6 @@ declare(strict_types=1);
 
 namespace Techork\PaymentService\Nuvei\Webhook\Handler;
 
-use Money\Currency;
-use Money\Money;
 use Techork\PaymentService\Nuvei\Webhook\DTO\NuveiEvent;
 use Techork\PaymentService\Gateway\ValueObject\GatewayId;
 use Techork\PaymentService\Gateway\Webhook\Contract\HandlerOutcome;
@@ -49,8 +47,7 @@ final readonly class SaleHandler implements WebhookEventHandler
             return $this->map($this->failureRecorder->onGatewayFailure($paymentIntentId, $reason));
         }
 
-        $currency = new Currency($event->currency() !== '' ? $event->currency() : 'USD');
-        $amount = new Money((int) $event->totalAmount(), $currency);
+        $amount = $event->totalMoney();
 
         return $this->map($this->successRecorder->onGatewaySuccess(
             $gatewayId,

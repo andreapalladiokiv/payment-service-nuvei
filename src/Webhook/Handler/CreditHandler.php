@@ -5,8 +5,6 @@ declare(strict_types=1);
 namespace Techork\PaymentService\Nuvei\Webhook\Handler;
 
 use DateTimeImmutable;
-use Money\Currency;
-use Money\Money;
 use Techork\PaymentService\Nuvei\Webhook\DTO\NuveiEvent;
 use Techork\PaymentService\Gateway\ValueObject\GatewayId;
 use Techork\PaymentService\Gateway\Webhook\Contract\HandlerOutcome;
@@ -55,8 +53,7 @@ final readonly class CreditHandler implements WebhookEventHandler
             return HandlerOutcome::Delay;
         }
 
-        $currency = new Currency($event->currency() !== '' ? $event->currency() : 'USD');
-        $amount = new Money((int) $event->totalAmount(), $currency);
+        $amount = $event->totalMoney();
         $isApproved = $event->status() === 'APPROVED';
 
         $outcome = $isApproved
@@ -75,10 +72,10 @@ final readonly class CreditHandler implements WebhookEventHandler
             RecorderOutcome::NotFound => HandlerOutcome::Delay,
         };
 
-        if ($isApproved && $outcome === RecorderOutcome::Applied && $event->feeAmount() > 0) {
+        $fee = $event->feeMoney();
+        if ($isApproved && $outcome === RecorderOutcome::Applied && $fee !== null) {
             $refundId = $this->resolver->resolveRefund($gatewayId, $refundReference);
             if ($refundId !== null) {
-                $fee = new Money((int) $event->feeAmount(), $currency);
                 $this->feeRecorder->onRefundFee($gatewayId, $refundId, $fee, new DateTimeImmutable);
             }
         }
