@@ -17,6 +17,7 @@ use Techork\PaymentService\Common\ValueObject\CreditCard;
 use Techork\PaymentService\Common\ValueObject\HostedPayment;
 use Techork\PaymentService\Common\ValueObject\PaymentMethod;
 use Techork\PaymentService\Common\ValueObject\Token;
+use Techork\PaymentService\Gateway\Exception\UnsupportedInstrument;
 use ValueError;
 
 /**
@@ -85,6 +86,6 @@ final class CreateCardRequest extends AbstractRequest implements PaymentInstrume
 
     public function visitHostedPayment(HostedPayment $hosted): never
     {
-        throw new \RuntimeException('Gateway does not support hosted-payment instruments.');
+        throw UnsupportedInstrument::forGateway('nuvei', 'createCard', $hosted);
     }
 }

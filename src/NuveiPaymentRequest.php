@@ -18,6 +18,7 @@ use Techork\PaymentService\Common\ValueObject\CreditCard;
 use Techork\PaymentService\Common\ValueObject\HostedPayment;
 use Techork\PaymentService\Common\ValueObject\PaymentMethod;
 use Techork\PaymentService\Common\ValueObject\Token;
+use Techork\PaymentService\Gateway\Exception\UnsupportedInstrument;
 use Techork\PaymentService\Gateway\Concern\InstrumentParameters;
 use Techork\PaymentService\Gateway\Contract\GatewayCredential;
 use Techork\PaymentService\Nuvei\Concern\NuveiRequestParameters;
@@ -164,6 +165,16 @@ abstract class NuveiPaymentRequest extends AbstractRequest implements PaymentIns
 
     public function visitHostedPayment(HostedPayment $hosted): array
     {
-        throw new RuntimeException('Gateway does not support hosted-payment instruments.');
+        // Only PurchaseRequest overrides this with the real Cashier build;
+        // every other Nuvei payment request lands here. Subclasses are named
+        // <Operation>Request, so the label names the path that refused rather
+        // than blaming the gateway as a whole.
+        $short = basename(str_replace('\\', '/', static::class));
+
+        throw UnsupportedInstrument::forGateway(
+            'nuvei',
+            lcfirst((string) preg_replace('/Request$/', '', $short)),
+            $hosted,
+        );
     }
 }
