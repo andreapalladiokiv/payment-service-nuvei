@@ -51,17 +51,53 @@ it('builds UPO creation data from token reference', function () {
         ->and($data['userTokenId'])->toBe('user@test.com');
 });
 
-it('throws on credit card instrument', function () {
-    $card = new CreditCard(new Number('476134', '1390', CardBrand::Visa), Expiration::fromMonthAndYear(12, 2030), new Holder('T'), new Cvc);
+it('builds a zero-amount verification from a raw card', function () {
+    // The card goes to `payment.do` rather than `addUPOCreditCard.do` because
+    // only the payment route answers with the issuer's AVS and CVV verdicts,
+    // which is what a lazy registration is performed to learn.
+    $card = new CreditCard(
+        Number::fromNumber('4761341234561390', new EncryptsToItself),
+        Expiration::fromMonthAndYear(12, 2030),
+        new Holder('T Cardholder'),
+        Cvc::fromCvc('123', new EncryptsToItself),
+    );
 
     $request = new CreatePaymentMethodRequest(new OmnipayClient, new HttpRequest);
     $request->initialize([
         'instrument' => $card,
-        'decrypter' => Mockery::mock(DecryptInterface::class),
+        'decrypter' => new EncryptsToItself,
+        'customerReference' => 'user@test.com',
     ]);
 
-    $request->getData();
-})->throws(RuntimeException::class, 'Credit card must be tokenized');
+    $data = $request->getData();
+
+    expect($data)->not->toHaveKey('ccTempToken')
+        ->and($data['userTokenId'])->toBe('user@test.com')
+        ->and($data['paymentOption']['card'])->toBe([
+            'cardNumber' => '4761341234561390',
+            'cardHolderName' => 'T Cardholder',
+            'expirationMonth' => '12',
+            'expirationYear' => '2030',
+            'CVV' => '123',
+        ]);
+});
+
+/**
+ * A decrypter that returns what it was given, so a test can assert the card
+ * fields the request assembles without standing up encryption.
+ */
+final readonly class EncryptsToItself implements DecryptInterface, Techork\PaymentService\Common\Contract\EncryptInterface
+{
+    public function decrypt(string $value): string
+    {
+        return $value;
+    }
+
+    public function encrypt(string $value): string
+    {
+        return $value;
+    }
+}
 
 it('throws on cash instrument', function () {
     $request = new CreatePaymentMethodRequest(new OmnipayClient, new HttpRequest);
