@@ -140,9 +140,21 @@ final class CreatePaymentMethodRequest extends AbstractRequest implements Paymen
     /**
      * Registers the card by asking the issuer to verify it for zero.
      *
-     * `storedCredentialsMode: '0'` marks this as the first, cardholder-present
-     * use of the credential, which is what lets later merchant-initiated payments
-     * against the resulting UPO claim the stored-credential chain.
+     * `storedCredentialsMode: '0'` does NOT establish the MIT chain, and the note
+     * that used to say so here was wrong on two counts. Nuvei's REST 1.0 reference
+     * makes it a separate mechanism from rebilling — "This parameter shows whether
+     * or not stored tokenized card data is sent to execute the transaction … This
+     * parameter is only applicable to merchants that store tokenized card data.
+     * Merchants that do not store card data or that are using Nuvei's tokenization
+     * feature should not send this parameter." We use their tokenization: this call
+     * produces a `userPaymentOptionId` and payments quote it. By that sentence we
+     * should not be sending the parameter at all, on either side.
+     *
+     * What actually marks the chain is `isRebilling` — "0" on the initial CIT, "1"
+     * plus `rebillingType` and `relatedTransactionId` on every subsequent MIT — and
+     * this repo sends none of it anywhere. Removing storedCredentialsMode is a
+     * behaviour change on the money path and wants a sandbox probe first, so it is
+     * left alone here rather than quietly dropped.
      *
      * @param  array<string, mixed>  $data
      * @return array<string, mixed>

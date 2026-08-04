@@ -49,10 +49,16 @@ final class CreatePaymentMethodResponse extends AbstractResponse implements Card
     }
 
     /**
-     * The zero-amount `Auth` this registration may have placed is the initial CIT
-     * of the stored-credential chain — {@see CreatePaymentMethodRequest::verifyCard}
-     * sends it with `storedCredentialsMode: '0'` — so its `transactionId` is what a
-     * later merchant-initiated payment quotes back as `relatedTransactionId`.
+     * The `transactionId` of the zero-amount `Auth` this registration may have
+     * placed — the only candidate anchor a registration can offer for the
+     * `relatedTransactionId` a later merchant-initiated payment must quote.
+     *
+     * Candidate, not confirmed: Nuvei documents the anchor as the initial CIT's
+     * transactionId and documents zero-amount authorization as the way to store a
+     * card, without ever joining the two. See
+     * {@see \Techork\PaymentService\Gateway\Contract\StoredCredentialReferenceProvider}.
+     * Note also that `storedCredentialsMode`, which this repo sends, is a different
+     * mechanism and is not what marks the chain.
      *
      * Only the payment route has one. `addUPOCreditCardByTempToken` is a vault
      * operation that reaches no issuer and begins no chain, and answers null here
