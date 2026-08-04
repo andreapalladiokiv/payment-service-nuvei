@@ -30,15 +30,18 @@ DMN webhooks. The Laravel bridge auto-discovers it via `extra.laravel` in
 | `retryRefund` | `PayoutRequest` | `payout.do` | Visa OCT / Mastercard MoneySend; independent of the original sale. Raw PANs rejected (PCI scope) — Token/PaymentMethod only |
 | `void` | `VoidRequest` | `voidTransaction.do` | Full-amount void; see quirks |
 | `createCard` | `CreateCardRequest` | `cardTokenization.do` | Raw `CreditCard` → `ccTempToken` |
-| `createPaymentMethod` | `CreatePaymentMethodRequest` | `addUPOCreditCardByTempToken.do` | `ccTempToken` → permanent UPO (`userPaymentOptionId`) |
+| `createPaymentMethod` | `CreatePaymentMethodRequest` | `addUPOCreditCardByTempToken.do` for a `Token`, or `payment.do` (zero-amount `Auth`) for a raw `CreditCard` | `ccTempToken` → permanent UPO (`userPaymentOptionId`); the `Auth` route returns the UPO plus the issuer's AVS/CVV verdicts |
 | `createCustomer` | `CreateCustomerRequest` | `createUser.do` | `userTokenId` = customer email |
 | `updateCustomer` | `UpdateCustomerRequest` | — | No-op; echoes existing reference |
 | `issueVirtualCard` etc. | — | — | Throw `RuntimeException` (no issuing) |
 
 Instrument mapping in `NuveiPaymentRequest` (visitor): `Token` →
-`card.ccTempToken`, `PaymentMethod` → `userPaymentOptionId` +
-`storedCredentialsMode: '1'`, raw `CreditCard` throws (tokenize first via
-`createCard`), `Cash` throws. An external 3DS result (`ThreeDSResult`) is
+`card.ccTempToken`, `PaymentMethod` → `userPaymentOptionId` only (no
+`storedCredentialsMode` is sent on payments; mode `'0'` is sent solely by
+`createPaymentMethod`'s zero-amount Auth), raw `CreditCard` throws (tokenize
+first via `createCard`), `Cash` throws. A rebilling series is marked instead by
+the root-level `isRebilling`/`rebillingType`/`relatedTransactionId` block that
+`authorizeRebilling` produces. An external 3DS result (`ThreeDSResult`) is
 forwarded as `threeD.externalMpi` (`eci`, `cavv`, `dsTransID`).
 
 Customer resolution: Nuvei requires the owning `userTokenId` when charging a
@@ -52,7 +55,10 @@ sent as `''` (Nuvei rejects it).
 
 Payment-operation responses (purchase / authorize / capture / refund /
 payout / void) extend `NuveiTransactionResponse`; the tokenization and
-customer responses are plain Omnipay `AbstractResponse`s. Success means
+customer responses `CreateCardResponse` and `CreateCustomerResponse` are plain
+Omnipay `AbstractResponse`s, with `CreatePaymentMethodResponse` additionally
+implementing `CardChecksProvider` (checks exist only on the zero-amount Auth
+shape, null on the vault route). Success means
 `status=SUCCESS` **and** `transactionStatus=APPROVED`; `getMessage()` falls
 back `reason` → `gwErrorReason` → `errCode`. It implements three Gateway
 contracts:
@@ -102,8 +108,10 @@ Correlation: requests send the caller's id as `clientUniqueId` — the
 PaymentIntent UUID for top-level ops, or `<uuid>:<verb>` for follow-ups
 (e.g. `:capture`); payment and void requests mirror the same id into
 `clientRequestId` (capture/refund send `clientUniqueId` only). The
-Auth/Sale/Settle handlers recover the UUID via
-`NuveiEvent::clientUniqueIdUuid()` and skip payloads that don't carry one.
+Sale/Settle handlers recover the UUID via
+`NuveiEvent::clientUniqueIdUuid()` and skip payloads that don't carry one; the
+Auth handler matches the raw `clientUniqueId` as a whole UUID and skips
+anything suffixed with `:<verb>`.
 `PayloadParser` extracts card metadata (`cardCompany`/`bin`/`last4Digits`) and
 the billing address from the DMN, backfilling missing fields with
 `ShreddingStubs` sentinels.

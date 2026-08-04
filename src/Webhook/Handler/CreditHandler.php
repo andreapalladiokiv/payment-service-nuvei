@@ -19,8 +19,8 @@ use Techork\PaymentService\Gateway\Webhook\Recorder\RefundProcessingRecorder;
  * Nuvei DMN `transactionType=Credit`: refund processed (APPROVED) or failed.
  *
  * On APPROVED with a non-zero `feeAmount`, also forwards the fee Nuvei
- * booked for this credit to {@see FeeRecorder} for admin display. We
- * resolve our internal refund id via
+ * booked for this credit to {@see GatewayFeeRecorder::onRefundFee} for admin
+ * display. We resolve our internal refund id via
  * {@see TransactionIdResolver::resolveRefund} — the gateway-side refund
  * reference is `PPP_TransactionID`.
  *

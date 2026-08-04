@@ -20,9 +20,9 @@ use Techork\PaymentService\Gateway\Webhook\Recorder\RecorderOutcome;
  * `<paymentIntentUuid>:capture` since the idempotency refactor. We
  * extract the UUID portion via {@see NuveiEvent::clientUniqueIdUuid}.
  *
- * `feeAmount` is the processor fee Nuvei booked for this settle —
- * forwarded to {@see FeeRecorder} for admin display. Settlement is the
- * earliest moment the fee is finalized on Nuvei's side.
+ * `feeAmount` is the processor fee Nuvei booked for this settle — forwarded
+ * to {@see GatewayFeeRecorder::onPaymentIntentFee} for admin display.
+ * Settlement is the earliest moment the fee is finalized on Nuvei's side.
  *
  * @implements WebhookEventHandler<NuveiEvent>
  */
