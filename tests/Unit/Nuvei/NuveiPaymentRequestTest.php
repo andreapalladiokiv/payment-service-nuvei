@@ -19,6 +19,7 @@ use Techork\PaymentService\Common\ValueObject\CreditCard\Holder;
 use Techork\PaymentService\Common\ValueObject\CreditCard\Number;
 use Techork\PaymentService\Common\ValueObject\ExpiresAt;
 use Techork\PaymentService\Common\ValueObject\HostedPayment;
+use Techork\PaymentService\Common\ValueObject\PaymentInitiation;
 use Techork\PaymentService\Common\ValueObject\PaymentMethod;
 use Techork\PaymentService\Common\ValueObject\PaymentMethodId;
 use Techork\PaymentService\Common\ValueObject\ThreeDS\ECICode;
@@ -494,4 +495,75 @@ it('refuses an attestation that carries neither cavv nor eci, naming both', func
 
 it('marks an incomplete attestation as a wiring error, not an acquirer decline', function () {
     expect(is_subclass_of(IncompleteAuthentication::class, UnsupportedByGateway::class))->toBeTrue();
+});
+
+// ──────────────────────────────────────────────
+//  the rebilling block
+//
+//  At the request ROOT, per Nuvei's own SDK: paymentCC() lists isRebilling in the
+//  same mandatoryFields array as merchantId and amount, and validate() checks that
+//  array against array_keys($params). The sandbox cannot corroborate it — it
+//  approves the block at any level, and a nonsense field too — so these tests pin
+//  the level the vendor's code implies, not the one a probe accepted.
+// ──────────────────────────────────────────────
+
+function rebillingRequest(PaymentInitiation $initiation, ?string $anchor = null): array
+{
+    $pm = new PaymentMethod(
+        PaymentMethodId::generate(),
+        nuveiTestCard(),
+        new BillingAddress('Test', 'User', '1 St', 'NYC', new Country('US'), '10001'),
+    );
+
+    $request = new PurchaseRequest(new OmnipayClient, new HttpRequest);
+    $request->initialize([
+        'money' => new Money(5000, new Currency('USD')),
+        'instrument' => $pm,
+        'gateway' => nuveiCredential(),
+        'decrypter' => Mockery::mock(DecryptInterface::class),
+        'referenceResolver' => nuveiRefResolver('upo_123'),
+        'sessionToken' => 'sess',
+        'initiation' => $initiation,
+        'storedCredentialReference' => $anchor,
+    ]);
+
+    return $request->getData();
+}
+
+it('declares a recurring merchant-initiated payment at the request root, with its anchor', function () {
+    $data = rebillingRequest(PaymentInitiation::MerchantRecurring, '1110000000123456');
+
+    expect($data['isRebilling'])->toBe('1')
+        ->and($data['rebillingType'])->toBe('Recurring')
+        ->and($data['relatedTransactionId'])->toBe('1110000000123456')
+        // Not nested: paymentOption carries the instrument, not the chain.
+        ->and($data['paymentOption'])->not->toHaveKey('isRebilling');
+});
+
+it('calls an unscheduled card-on-file payment MIT rather than Recurring', function () {
+    $data = rebillingRequest(PaymentInitiation::MerchantUnscheduled, '1110000000123456');
+
+    expect($data['rebillingType'])->toBe('MIT');
+});
+
+it('declares the chain without an anchor rather than not declaring it at all', function () {
+    // Every subscription created before the genesis was recorded reaches its next
+    // renewal in exactly this state. Refusing would break those; submitting it as
+    // cardholder-present would be the worse lie.
+    $data = rebillingRequest(PaymentInitiation::MerchantRecurring);
+
+    expect($data['isRebilling'])->toBe('1')
+        ->and($data['rebillingType'])->toBe('Recurring')
+        ->and($data)->not->toHaveKey('relatedTransactionId');
+});
+
+it('sends no rebilling block at all on a cardholder-present payment', function () {
+    // isRebilling is Conditional — "when performing recurring/rebilling". Sending
+    // "0" here would declare an intent to rebill on every one-off checkout, since
+    // PaymentInitiation cannot tell a first-of-series CIT from a standalone one.
+    $data = rebillingRequest(PaymentInitiation::CardholderInitiated, '1110000000123456');
+
+    expect($data)->not->toHaveKey('isRebilling')
+        ->and($data)->not->toHaveKey('rebillingType')
+        ->and($data)->not->toHaveKey('relatedTransactionId');
 });

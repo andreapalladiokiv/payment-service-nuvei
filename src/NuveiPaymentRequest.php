@@ -16,6 +16,7 @@ use Techork\PaymentService\Common\Contract\PaymentInstrumentVisitor;
 use Techork\PaymentService\Common\ValueObject\Cash;
 use Techork\PaymentService\Common\ValueObject\CreditCard;
 use Techork\PaymentService\Common\ValueObject\HostedPayment;
+use Techork\PaymentService\Common\ValueObject\PaymentInitiation;
 use Techork\PaymentService\Common\ValueObject\PaymentMethod;
 use Techork\PaymentService\Common\ValueObject\Token;
 use Techork\PaymentService\Gateway\Exception\IncompleteAuthentication;
@@ -124,6 +125,8 @@ abstract class NuveiPaymentRequest extends AbstractRequest implements PaymentIns
             $data['settleType'] = $settleType;
         }
 
+        $data = [...$data, ...$this->rebilling()];
+
         $statementDescription = $this->getStatementDescription();
         if ($statementDescription !== null && $statementDescription !== '') {
             $data['dynamicDescriptor'] = ['merchantName' => $statementDescription];
@@ -197,6 +200,66 @@ abstract class NuveiPaymentRequest extends AbstractRequest implements PaymentIns
         // Only PurchaseRequest overrides this with the real Cashier build;
         // every other Nuvei payment request lands here.
         throw UnsupportedInstrument::forGateway('nuvei', $this->operationLabel(), $hosted);
+    }
+
+    /**
+     * The stored-credential chain, as Nuvei's rebilling parameters.
+     *
+     * AT THE ROOT, and that is sourced rather than guessed. Their own SDK settles
+     * it: `Payments\CreditCard::paymentCC()` lists `isRebilling` in the same
+     * `$mandatoryFields` array as `merchantId`, `amount` and `checksum`, and
+     * `BaseService::validate()` checks that array against `array_keys($params)` —
+     * the top level. `PaymentService::createPayment()` likewise reaches for
+     * `$params['externalSchemeDetails']` at the root, and that class is the
+     * documented either/or partner of `relatedTransactionId`. The sandbox cannot
+     * corroborate it: a probe found it approves the block at the root, nested under
+     * `paymentOption.card`, and as a nonsense field, so acceptance there identifies
+     * nothing (see NuveiRebillingProbeTest).
+     *
+     * The anchor rides along only when the caller resolved one. Nuvei marks it
+     * required for MIT, so declaring a chain without it is by their contract an
+     * incomplete request — but refusing outright would break the next renewal of
+     * every subscription that predates the anchor being recorded at all, and a
+     * renewal declared merchant-initiated without an anchor is still better than
+     * one submitted as though the cardholder were present. So it declares what it
+     * knows and omits what it does not.
+     *
+     * Not sent here: `rebillFrequency` / `rebillExpiry`. Those belong on the
+     * INITIAL 3DS CIT, under `card.threeD.v2AdditionalParams`, not on the
+     * subsequent payment this class builds.
+     *
+     * @return array<string, string>
+     */
+    private function rebilling(): array
+    {
+        $initiation = $this->getInitiation();
+
+        if ($initiation->isCardholderInitiated()) {
+            // Conditional in their reference — "when performing recurring/rebilling"
+            // — and a cardholder-present payment is not that. Sending "0" here would
+            // declare an intent to rebill on every one-off checkout, since this enum
+            // does not distinguish a first-of-series CIT from a standalone one.
+            return [];
+        }
+
+        $rebilling = [
+            'isRebilling' => '1',
+            'rebillingType' => match ($initiation) {
+                PaymentInitiation::MerchantRecurring => 'Recurring',
+                // Merchant-initiated without a fixed schedule. Their other two
+                // values, NoShow and DelayedCharges, are industry-specific and need
+                // an account-manager conversation before anything may send them.
+                default => 'MIT',
+            },
+        ];
+
+        $anchor = $this->getStoredCredentialReference();
+
+        if ($anchor !== null && $anchor !== '') {
+            $rebilling['relatedTransactionId'] = $anchor;
+        }
+
+        return $rebilling;
     }
 
     /**
