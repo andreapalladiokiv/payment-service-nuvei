@@ -235,27 +235,42 @@ abstract class NuveiPaymentRequest extends AbstractRequest implements PaymentIns
         $initiation = $this->getInitiation();
 
         if ($initiation->isCardholderInitiated()) {
-            // Conditional in their reference — "when performing recurring/rebilling"
-            // — and a cardholder-present payment is not that. Sending "0" here would
-            // declare an intent to rebill on every one-off checkout, since this enum
-            // does not distinguish a first-of-series CIT from a standalone one.
+            // Conditional in their reference — required "when performing
+            // recurring/rebilling" — and nothing here can tell a subscription opened
+            // by a present cardholder from a standalone checkout. Both arrive as
+            // CardholderInitiated with no anchor. Sending "0" would tell the acquirer
+            // to expect renewals of every one-off sale, so the ambiguity resolves
+            // toward silence: a missing "0" understates a series, an invented one
+            // describes a series that does not exist.
             return [];
+        }
+
+        $anchor = $this->getStoredCredentialReference();
+        $hasAnchor = $anchor !== null && $anchor !== '';
+
+        // "0 – For the first rebilling payment. 1 – For all subsequent rebilling
+        // transactions" — their reference is worded on position in the series, not on
+        // who initiated the payment, and the two axes come apart. A series opened
+        // without the cardholder present is MerchantUnscheduled and is still the
+        // FIRST of its series; a recurring payment is by construction never first.
+        // So the position follows from the initiation plus whether anything precedes
+        // this payment, and needs no separate flag.
+        if ($initiation === PaymentInitiation::MerchantUnscheduled && ! $hasAnchor) {
+            return ['isRebilling' => '0'];
         }
 
         $rebilling = [
             'isRebilling' => '1',
-            'rebillingType' => match ($initiation) {
-                PaymentInitiation::MerchantRecurring => 'Recurring',
-                // Merchant-initiated without a fixed schedule. Their other two
-                // values, NoShow and DelayedCharges, are industry-specific and need
-                // an account-manager conversation before anything may send them.
-                default => 'MIT',
-            },
+            // Here the initiation IS the right axis: it says whether the series bills
+            // on a schedule or on demand. Their other two values, NoShow and
+            // DelayedCharges, are industry-specific and need an account-manager
+            // conversation before anything may send them.
+            'rebillingType' => $initiation === PaymentInitiation::MerchantRecurring
+                ? 'Recurring'
+                : 'MIT',
         ];
 
-        $anchor = $this->getStoredCredentialReference();
-
-        if ($anchor !== null && $anchor !== '') {
+        if ($hasAnchor) {
             $rebilling['relatedTransactionId'] = $anchor;
         }
 
