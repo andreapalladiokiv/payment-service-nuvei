@@ -18,11 +18,11 @@ use Techork\PaymentService\Common\ValueObject\CreditCard;
 use Techork\PaymentService\Common\ValueObject\HostedPayment;
 use Techork\PaymentService\Common\ValueObject\PaymentMethod;
 use Techork\PaymentService\Common\ValueObject\Token;
+use Techork\PaymentService\Gateway\Exception\IncompleteAuthentication;
 use Techork\PaymentService\Gateway\Exception\UnsupportedInstrument;
 use Techork\PaymentService\Gateway\Concern\InstrumentParameters;
 use Techork\PaymentService\Gateway\Contract\GatewayCredential;
 use Techork\PaymentService\Nuvei\Concern\NuveiRequestParameters;
-use ValueError;
 
 /**
  * Base for Nuvei purchase/authorize requests.
@@ -50,10 +50,37 @@ abstract class NuveiPaymentRequest extends AbstractRequest implements PaymentIns
         $threeDS = $this->getThreeDS();
 
         if ($threeDS !== null) {
+            // Nuvei marks eci, cavv and dsTransID all Required inside externalMpi.
+            // An attestation that did not succeed carries neither cavv nor eci, so
+            // assembling the block anyway posts a body Nuvei rejects — and that
+            // rejection would enter the stream as an issuer decline. Refuse here,
+            // before the request leaves.
+            $missing = [];
+
+            if ($threeDS->eci === null) {
+                $missing[] = 'eci';
+            }
+
+            if (($threeDS->authenticationValue ?? '') === '') {
+                $missing[] = 'cavv';
+            }
+
+            if ($threeDS->dsTransactionId === '') {
+                $missing[] = 'dsTransID';
+            }
+
+            if ($missing !== []) {
+                throw IncompleteAuthentication::missingFields('nuvei', $this->operationLabel(), $missing);
+            }
+
             $externalMpi = [
                 'eci' => $threeDS->eci->value,
                 'cavv' => $threeDS->authenticationValue,
                 'dsTransID' => $threeDS->dsTransactionId,
+                // Mandatory whenever external-MPI values are present. NoPreference,
+                // never ExemptionRequest: asking for an exemption while presenting a
+                // cryptogram gives up the very liability shift it was obtained for.
+                'challengePreference' => 'NoPreference',
             ];
 
             if (isset($paymentOption['card'])) {
@@ -107,12 +134,14 @@ abstract class NuveiPaymentRequest extends AbstractRequest implements PaymentIns
 
     public function visitCreditCard(CreditCard $card): never
     {
-        throw new RuntimeException('Credit card must be tokenized before payment via Nuvei.');
+        // Nuvei takes card data only through tokenization (createCard /
+        // createPaymentMethod); a payment request carries the resulting reference.
+        throw UnsupportedInstrument::forGateway('nuvei', $this->operationLabel(), $card);
     }
 
     public function visitCash(Cash $cash): never
     {
-        throw new ValueError('Nuvei does not support cash payments.');
+        throw UnsupportedInstrument::forGateway('nuvei', $this->operationLabel(), $cash);
     }
 
     public function visitToken(Token $token): array
@@ -166,15 +195,18 @@ abstract class NuveiPaymentRequest extends AbstractRequest implements PaymentIns
     public function visitHostedPayment(HostedPayment $hosted): array
     {
         // Only PurchaseRequest overrides this with the real Cashier build;
-        // every other Nuvei payment request lands here. Subclasses are named
-        // <Operation>Request, so the label names the path that refused rather
-        // than blaming the gateway as a whole.
+        // every other Nuvei payment request lands here.
+        throw UnsupportedInstrument::forGateway('nuvei', $this->operationLabel(), $hosted);
+    }
+
+    /**
+     * Names the path that refused, rather than blaming the gateway as a whole.
+     * Subclasses are named <Operation>Request, so the class name is the label.
+     */
+    private function operationLabel(): string
+    {
         $short = basename(str_replace('\\', '/', static::class));
 
-        throw UnsupportedInstrument::forGateway(
-            'nuvei',
-            lcfirst((string) preg_replace('/Request$/', '', $short)),
-            $hosted,
-        );
+        return lcfirst((string) preg_replace('/Request$/', '', $short));
     }
 }

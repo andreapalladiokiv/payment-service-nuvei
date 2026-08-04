@@ -29,6 +29,9 @@ use Techork\PaymentService\Common\ValueObject\Token;
 use Techork\PaymentService\Common\ValueObject\TokenId;
 use Techork\PaymentService\Gateway\Contract\GatewayCredential;
 use Techork\PaymentService\Gateway\Contract\GatewayInstrumentRepository;
+use Techork\PaymentService\Gateway\Exception\IncompleteAuthentication;
+use Techork\PaymentService\Gateway\Exception\UnsupportedByGateway;
+use Techork\PaymentService\Gateway\Exception\UnsupportedInstrument;
 use Techork\PaymentService\Nuvei\PurchaseRequest;
 use Techork\PaymentService\Gateway\ValueObject\GatewayId;
 
@@ -220,7 +223,7 @@ it('throws on credit card instrument', function () {
     ]);
 
     $request->getData();
-})->throws(RuntimeException::class, 'Credit card must be tokenized');
+})->throws(UnsupportedInstrument::class, 'does not accept a "card" instrument on the "purchase" operation');
 
 it('throws on cash instrument', function () {
     $request = new PurchaseRequest(new OmnipayClient, new HttpRequest);
@@ -233,7 +236,7 @@ it('throws on cash instrument', function () {
     ]);
 
     $request->getData();
-})->throws(ValueError::class, 'Nuvei does not support cash');
+})->throws(UnsupportedInstrument::class, 'does not accept a "cash" instrument on the "purchase" operation');
 
 it('includes externalMpi in card paymentOption when threeDS is present', function () {
     $token = new Token(
@@ -269,6 +272,7 @@ it('includes externalMpi in card paymentOption when threeDS is present', functio
         'eci' => '05',
         'cavv' => 'cavv-value-123',
         'dsTransID' => 'ds-txn-abc',
+        'challengePreference' => 'NoPreference',
     ]);
 });
 
@@ -306,6 +310,7 @@ it('includes externalMpi at top level for stored PM when threeDS is present', fu
         'eci' => '02',
         'cavv' => 'cavv-pm-value',
         'dsTransID' => 'ds-txn-pm',
+        'challengePreference' => 'NoPreference',
     ])
         ->and($data['paymentOption'])->not->toHaveKey('card');
 });
@@ -418,4 +423,75 @@ it('excludes threeD block when threeDS is null', function () {
 
     expect($data['paymentOption']['card'])->not->toHaveKey('threeD')
         ->and($data['paymentOption'])->not->toHaveKey('threeD');
+});
+
+// ──────────────────────────────────────────────
+//  Incomplete attestations are refused, not posted
+//
+//  Nuvei marks eci, cavv and dsTransID all Required inside externalMpi. Before
+//  this guard a result without an ECI dereferenced null and died with a PHP
+//  Error mid-request; dropping the key instead would have posted a body Nuvei
+//  rejects, and the rejection would have been recorded as an issuer decline.
+// ──────────────────────────────────────────────
+
+it('refuses a 3DS attestation with no ECI rather than posting an invalid externalMpi', function () {
+    $token = new Token(
+        TokenId::generate(),
+        nuveiTestCard(),
+        ExpiresAt::fromDateTime(new DateTimeImmutable('+1 hour')),
+    );
+
+    $request = new PurchaseRequest(new OmnipayClient, new HttpRequest);
+    $request->initialize([
+        'money' => new Money(5000, new Currency('USD')),
+        'instrument' => $token,
+        'gateway' => nuveiCredential(),
+        'decrypter' => Mockery::mock(DecryptInterface::class),
+        'referenceResolver' => nuveiRefResolver('temp_token_xyz'),
+        'sessionToken' => 'sess_789',
+        'threeDS' => new ThreeDSResult(
+            ThreeDSStatus::Successful,
+            'cavv-value-123',
+            null,
+            'ds-txn-abc',
+            'acs-txn-def',
+            ThreeDSVersion::V220,
+        ),
+    ]);
+
+    $request->getData();
+})->throws(IncompleteAuthentication::class, 'missing eci');
+
+it('refuses an attestation that carries neither cavv nor eci, naming both', function () {
+    $token = new Token(
+        TokenId::generate(),
+        nuveiTestCard(),
+        ExpiresAt::fromDateTime(new DateTimeImmutable('+1 hour')),
+    );
+
+    $request = new PurchaseRequest(new OmnipayClient, new HttpRequest);
+    $request->initialize([
+        'money' => new Money(5000, new Currency('USD')),
+        'instrument' => $token,
+        'gateway' => nuveiCredential(),
+        'decrypter' => Mockery::mock(DecryptInterface::class),
+        'referenceResolver' => nuveiRefResolver('temp_token_xyz'),
+        'sessionToken' => 'sess_789',
+        // NotAuthenticated carries no authentication value and no ECI — the
+        // shape an app hands in when it forwards a failed authentication.
+        'threeDS' => new ThreeDSResult(
+            ThreeDSStatus::NotAuthenticated,
+            null,
+            null,
+            'ds-txn-abc',
+            'acs-txn-def',
+            ThreeDSVersion::V220,
+        ),
+    ]);
+
+    $request->getData();
+})->throws(IncompleteAuthentication::class, 'missing eci, cavv');
+
+it('marks an incomplete attestation as a wiring error, not an acquirer decline', function () {
+    expect(is_subclass_of(IncompleteAuthentication::class, UnsupportedByGateway::class))->toBeTrue();
 });

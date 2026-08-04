@@ -95,6 +95,7 @@ it('includes externalMpi in card paymentOption when threeDS present', function (
         'eci' => '05',
         'cavv' => 'cavv-value-123',
         'dsTransID' => 'ds-txn-abc',
+        'challengePreference' => 'NoPreference',
     ]);
 });
 
@@ -136,6 +137,7 @@ it('includes externalMpi at top level for stored payment method', function () {
         'eci' => '02',
         'cavv' => 'cavv-pm-value',
         'dsTransID' => 'ds-txn-pm',
+        'challengePreference' => 'NoPreference',
     ])
         ->and($data['paymentOption'])->not->toHaveKey('card');
 });
