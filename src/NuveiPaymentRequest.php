@@ -205,76 +205,69 @@ abstract class NuveiPaymentRequest extends AbstractRequest implements PaymentIns
     /**
      * The stored-credential chain, as Nuvei's rebilling parameters.
      *
-     * AT THE ROOT, and that is sourced rather than guessed. Their own SDK settles
-     * it: `Payments\CreditCard::paymentCC()` lists `isRebilling` in the same
+     * AT THE ROOT, and that is sourced rather than guessed. Their own SDK settles it:
+     * `Payments\CreditCard::paymentCC()` lists `isRebilling` in the same
      * `$mandatoryFields` array as `merchantId`, `amount` and `checksum`, and
-     * `BaseService::validate()` checks that array against `array_keys($params)` —
-     * the top level. `PaymentService::createPayment()` likewise reaches for
+     * `BaseService::validate()` checks that array against `array_keys($params)` — the
+     * top level. `PaymentService::createPayment()` likewise reaches for
      * `$params['externalSchemeDetails']` at the root, and that class is the
      * documented either/or partner of `relatedTransactionId`. The sandbox cannot
      * corroborate it: a probe found it approves the block at the root, nested under
-     * `paymentOption.card`, and as a nonsense field, so acceptance there identifies
-     * nothing (see NuveiRebillingProbeTest).
+     * `paymentOption.card`, with a bogus anchor, with none, and as a nonsense field,
+     * so acceptance there identifies nothing (see NuveiRebillingProbeTest).
      *
-     * The anchor rides along only when the caller resolved one. Nuvei marks it
-     * required for MIT, so declaring a chain without it is by their contract an
-     * incomplete request — but refusing outright would break the next renewal of
-     * every subscription that predates the anchor being recorded at all, and a
-     * renewal declared merchant-initiated without an anchor is still better than
-     * one submitted as though the cardholder were present. So it declares what it
-     * knows and omits what it does not.
-     *
-     * Not sent here: `rebillFrequency` / `rebillExpiry`. Those belong on the
-     * INITIAL 3DS CIT, under `card.threeD.v2AdditionalParams`, not on the
-     * subsequent payment this class builds.
+     * Not sent here: `rebillFrequency` / `rebillExpiry`. Those belong on the INITIAL
+     * 3DS CIT, under `card.threeD.v2AdditionalParams`, not on a subsequent payment.
      *
      * @return array<string, string>
      */
     private function rebilling(): array
     {
-        $initiation = $this->getInitiation();
-
-        if ($initiation->isCardholderInitiated()) {
+        if (! $this->isInStoredCredentialSeries()) {
             // Conditional in their reference — required "when performing
-            // recurring/rebilling" — and nothing here can tell a subscription opened
-            // by a present cardholder from a standalone checkout. Both arrive as
-            // CardholderInitiated with no anchor. Sending "0" would tell the acquirer
-            // to expect renewals of every one-off sale, so the ambiguity resolves
-            // toward silence: a missing "0" understates a series, an invented one
-            // describes a series that does not exist.
+            // recurring/rebilling". A payment outside a series is not that, and "0"
+            // here would tell the acquirer to expect renewals that never come.
             return [];
         }
 
         $anchor = $this->getStoredCredentialReference();
-        $hasAnchor = $anchor !== null && $anchor !== '';
 
         // "0 – For the first rebilling payment. 1 – For all subsequent rebilling
-        // transactions" — their reference is worded on position in the series, not on
-        // who initiated the payment, and the two axes come apart. A series opened
-        // without the cardholder present is MerchantUnscheduled and is still the
-        // FIRST of its series; a recurring payment is by construction never first.
-        // So the position follows from the initiation plus whether anything precedes
-        // this payment, and needs no separate flag.
-        if ($initiation === PaymentInitiation::MerchantUnscheduled && ! $hasAnchor) {
+        // transactions." Position, not who initiated it: a series opened by a present
+        // cardholder is still the first of its series. Inside a series the anchor's
+        // absence is unambiguous — nothing precedes this payment — which is precisely
+        // what it could not mean on the ordinary authorize path, where absence also
+        // meant "no series at all".
+        $opensTheSeries = $anchor === null || $anchor === '';
+
+        // Except that a recurring payment cannot be the one that opens a series — a
+        // renewal by definition has something before it. Reaching here without an
+        // anchor means the genesis was never recorded, which is every subscription
+        // predating it being carried at all. Declaring that a first payment would
+        // tell the acquirer a new series starts on every renewal, so it stays a
+        // subsequent one with the reference simply missing.
+        if ($opensTheSeries && $this->getInitiation() === PaymentInitiation::MerchantRecurring) {
+            return ['isRebilling' => '1', 'rebillingType' => 'Recurring'];
+        }
+
+        if ($opensTheSeries) {
+            // No rebillingType and no anchor: their MIT page asks for the sub-type
+            // only "for subsequent MIT payments", and the first is what later ones
+            // point at.
             return ['isRebilling' => '0'];
         }
 
-        $rebilling = [
+        return [
             'isRebilling' => '1',
-            // Here the initiation IS the right axis: it says whether the series bills
-            // on a schedule or on demand. Their other two values, NoShow and
+            // Here initiation IS the right axis — it says whether the series bills on
+            // a schedule or on demand. Their other two values, NoShow and
             // DelayedCharges, are industry-specific and need an account-manager
             // conversation before anything may send them.
-            'rebillingType' => $initiation === PaymentInitiation::MerchantRecurring
+            'rebillingType' => $this->getInitiation() === PaymentInitiation::MerchantRecurring
                 ? 'Recurring'
                 : 'MIT',
+            'relatedTransactionId' => $anchor,
         ];
-
-        if ($hasAnchor) {
-            $rebilling['relatedTransactionId'] = $anchor;
-        }
-
-        return $rebilling;
     }
 
     /**

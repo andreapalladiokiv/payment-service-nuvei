@@ -513,7 +513,7 @@ it('marks an incomplete attestation as a wiring error, not an acquirer decline',
 //  approves the block anywhere, and a nonsense field too (NuveiRebillingProbeTest).
 // ──────────────────────────────────────────────
 
-function rebillingRequest(PaymentInitiation $initiation, ?string $anchor = null): array
+function rebillingRequest(PaymentInitiation $initiation, ?string $anchor = null, bool $inSeries = true): array
 {
     $pm = new PaymentMethod(
         PaymentMethodId::generate(),
@@ -531,34 +531,27 @@ function rebillingRequest(PaymentInitiation $initiation, ?string $anchor = null)
         'sessionToken' => 'sess',
         'initiation' => $initiation,
         'storedCredentialReference' => $anchor,
+        'inStoredCredentialSeries' => $inSeries,
     ]);
 
     return $request->getData();
 }
 
-it('marks a series opened without the cardholder as the first payment', function () {
-    // The case keying this on CIT/MIT got wrong: a subscription the merchant opens is
-    // MerchantUnscheduled, and it is the FIRST of its series, not a subsequent one.
-    // Nothing precedes it, so there is no anchor — which is what identifies it.
-    $data = rebillingRequest(PaymentInitiation::MerchantUnscheduled);
+it('marks the payment that opens a series as the first, whoever initiated it', function (PaymentInitiation $initiation) {
+    // Inside a series the absent anchor is unambiguous: nothing precedes this
+    // payment. Keying the position on CIT/MIT got the second of these wrong — a
+    // subscription the merchant opens is still the FIRST of its series.
+    $data = rebillingRequest($initiation);
 
     expect($data['isRebilling'])->toBe('0')
         // Their MIT page asks for the sub-type only "for subsequent MIT payments",
         // and there is nothing before the first for an anchor to name.
         ->and($data)->not->toHaveKey('rebillingType')
         ->and($data)->not->toHaveKey('relatedTransactionId');
-});
-
-it('declares a recurring payment subsequent even with no anchor, since it never opens a series', function () {
-    // Every subscription created before the genesis was recorded reaches its next
-    // renewal in exactly this state. It is still a renewal: recurring is by
-    // construction never the first of its series, so it must not become a "0".
-    $data = rebillingRequest(PaymentInitiation::MerchantRecurring);
-
-    expect($data['isRebilling'])->toBe('1')
-        ->and($data['rebillingType'])->toBe('Recurring')
-        ->and($data)->not->toHaveKey('relatedTransactionId');
-});
+})->with([
+    PaymentInitiation::CardholderInitiated,
+    PaymentInitiation::MerchantUnscheduled,
+]);
 
 it('declares a recurring payment at the root, with its anchor', function () {
     $data = rebillingRequest(PaymentInitiation::MerchantRecurring, '1110000000123456');
@@ -571,9 +564,9 @@ it('declares a recurring payment at the root, with its anchor', function () {
 });
 
 it('calls an unscheduled payment that continues a series MIT rather than Recurring', function () {
-    // Same initiation as the opening case above; the anchor is what makes it
-    // subsequent. On a subsequent payment the initiation decides the sub-type —
-    // whether the series bills on a schedule or on demand.
+    // Same initiation as an opening payment; the anchor is what makes it subsequent.
+    // On a subsequent payment the initiation decides the sub-type — whether the
+    // series bills on a schedule or on demand.
     $data = rebillingRequest(PaymentInitiation::MerchantUnscheduled, '1110000000123456');
 
     expect($data['isRebilling'])->toBe('1')
@@ -581,13 +574,26 @@ it('calls an unscheduled payment that continues a series MIT rather than Recurri
         ->and($data['relatedTransactionId'])->toBe('1110000000123456');
 });
 
-it('sends no rebilling block on a cardholder-present payment, even handed an anchor', function () {
-    // The one lossy row, and deliberately so: a subscription opened by a present
-    // cardholder is indistinguishable here from a one-off checkout, and inventing a
-    // "0" would promise renewals of every standalone sale.
-    $data = rebillingRequest(PaymentInitiation::CardholderInitiated, '1110000000123456');
+it('sends no rebilling block on a payment outside any series, even handed an anchor', function () {
+    // Outside a series there is no position to declare, and "0" would promise the
+    // acquirer renewals of a standalone sale. The ordinary authorize path never sets
+    // the flag, so this is what every one-off payment looks like.
+    $data = rebillingRequest(PaymentInitiation::CardholderInitiated, '1110000000123456', inSeries: false);
 
     expect($data)->not->toHaveKey('isRebilling')
         ->and($data)->not->toHaveKey('rebillingType')
+        ->and($data)->not->toHaveKey('relatedTransactionId');
+});
+
+it('never lets a renewal call itself the first payment of its series', function () {
+    // Every subscription created before the genesis was carried reaches its next
+    // renewal in exactly this state: in a series, no anchor. Inside a series a
+    // missing anchor otherwise means "this opens it", and a renewal cannot — so it
+    // stays subsequent with the reference simply absent, rather than telling the
+    // acquirer a fresh series begins on every renewal.
+    $data = rebillingRequest(PaymentInitiation::MerchantRecurring);
+
+    expect($data['isRebilling'])->toBe('1')
+        ->and($data['rebillingType'])->toBe('Recurring')
         ->and($data)->not->toHaveKey('relatedTransactionId');
 });
