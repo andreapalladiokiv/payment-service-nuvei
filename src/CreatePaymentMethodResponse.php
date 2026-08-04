@@ -7,7 +7,6 @@ namespace Techork\PaymentService\Nuvei;
 use Omnipay\Common\Message\AbstractResponse;
 use Techork\PaymentService\Common\ValueObject\CreditCard\CheckResult;
 use Techork\PaymentService\Gateway\Contract\CardChecksProvider;
-use Techork\PaymentService\Gateway\Contract\StoredCredentialReferenceProvider;
 
 /**
  * Reads either shape {@see CreatePaymentMethodRequest} can produce.
@@ -22,7 +21,7 @@ use Techork\PaymentService\Gateway\Contract\StoredCredentialReferenceProvider;
  * only on that shape. The vault route reports none, which surfaces here as null
  * rather than as a check that passed.
  */
-final class CreatePaymentMethodResponse extends AbstractResponse implements CardChecksProvider, StoredCredentialReferenceProvider
+final class CreatePaymentMethodResponse extends AbstractResponse implements CardChecksProvider
 {
     public function isSuccessful(): bool
     {
@@ -44,30 +43,6 @@ final class CreatePaymentMethodResponse extends AbstractResponse implements Card
         $reference = $this->data['userPaymentOptionId']
             ?? $this->data['paymentOption']['userPaymentOptionId']
             ?? null;
-
-        return $reference === null || $reference === '' ? null : (string) $reference;
-    }
-
-    /**
-     * The `transactionId` of the zero-amount `Auth` this registration may have
-     * placed — the only candidate anchor a registration can offer for the
-     * `relatedTransactionId` a later merchant-initiated payment must quote.
-     *
-     * Candidate, not confirmed: Nuvei documents the anchor as the initial CIT's
-     * transactionId and documents zero-amount authorization as the way to store a
-     * card, without ever joining the two. See
-     * {@see \Techork\PaymentService\Gateway\Contract\StoredCredentialReferenceProvider}.
-     * Note also that `storedCredentialsMode`, which this repo sends, is a different
-     * mechanism and is not what marks the chain.
-     *
-     * Only the payment route has one. `addUPOCreditCardByTempToken` is a vault
-     * operation that reaches no issuer and begins no chain, and answers null here
-     * rather than borrowing the UPO id, which would anchor the series to something
-     * the acquirer has never seen as a transaction.
-     */
-    public function getStoredCredentialReference(): ?string
-    {
-        $reference = $this->data['transactionId'] ?? null;
 
         return $reference === null || $reference === '' ? null : (string) $reference;
     }
