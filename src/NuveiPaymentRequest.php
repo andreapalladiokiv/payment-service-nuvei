@@ -164,12 +164,18 @@ abstract class NuveiPaymentRequest extends AbstractRequest implements PaymentIns
         $reference = $this->getReferenceResolver()->find($gateway->getId(), $paymentMethod)
             ?? throw new RuntimeException("No Nuvei reference found for payment method {$paymentMethod->id}.");
 
-        return [
-            'userPaymentOptionId' => $reference,
-            'storedCredentials' => [
-                'storedCredentialsMode' => '1',
-            ],
-        ];
+        // No storedCredentials. Their REST 1.0 reference is explicit that merchants
+        // "using Nuvei's tokenization feature should not send this parameter", and we
+        // do use it — this very method resolves a userPaymentOptionId to pay with. It
+        // was sent unconditionally for any stored instrument, which also meant the
+        // stored-credential marker was derived from the SHAPE of the instrument rather
+        // than from anything about the payment.
+        //
+        // What actually marks a rebilling chain is `isRebilling`, and that now has an
+        // operation of its own to travel on: `authorizeRebilling` sets it, an ordinary
+        // payment sets nothing. Splitting the operations is what made this removable —
+        // before it, this was the only place any stored-credential signal existed.
+        return ['userPaymentOptionId' => $reference];
     }
 
     public function sendData($data): AbstractResponse

@@ -140,21 +140,20 @@ final class CreatePaymentMethodRequest extends AbstractRequest implements Paymen
     /**
      * Registers the card by asking the issuer to verify it for zero.
      *
-     * `storedCredentialsMode: '0'` does NOT establish the MIT chain, and the note
-     * that used to say so here was wrong on two counts. Nuvei's REST 1.0 reference
-     * makes it a separate mechanism from rebilling — "This parameter shows whether
-     * or not stored tokenized card data is sent to execute the transaction … This
-     * parameter is only applicable to merchants that store tokenized card data.
-     * Merchants that do not store card data or that are using Nuvei's tokenization
-     * feature should not send this parameter." We use their tokenization: this call
-     * produces a `userPaymentOptionId` and payments quote it. By that sentence we
-     * should not be sending the parameter at all, on either side.
+     * `storedCredentialsMode: '0'` belongs here and only here — this is the moment a
+     * credential is stored, which is what the parameter describes: Nuvei's REST 1.0
+     * reference defines it as showing "whether or not stored tokenized card data is
+     * sent to execute the transaction", `'0'` being "the card data was entered for the
+     * first time, and, upon completion of the transaction, is tokenized and stored".
+     * Registration is reached only through `createPaymentMethod`, an operation of its
+     * own, so saying it here says it exactly once.
      *
-     * What actually marks the chain is `isRebilling` — "0" on the initial CIT, "1"
-     * plus `rebillingType` and `relatedTransactionId` on every subsequent MIT — and
-     * this repo sends none of it anywhere. Removing storedCredentialsMode is a
-     * behaviour change on the money path and wants a sandbox probe first, so it is
-     * left alone here rather than quietly dropped.
+     * It does NOT establish the MIT chain, and the note that used to stand here
+     * claiming it did was wrong: what marks a chain is `isRebilling`, and that travels
+     * on `authorizeRebilling`. Payments accordingly send no stored-credential marker at
+     * all now — {@see \Techork\PaymentService\Nuvei\NuveiPaymentRequest::visitPaymentMethod}
+     * used to attach mode `'1'` to every stored instrument, deriving a
+     * stored-credential claim from the instrument's shape rather than from the payment.
      *
      * @param  array<string, mixed>  $data
      * @return array<string, mixed>

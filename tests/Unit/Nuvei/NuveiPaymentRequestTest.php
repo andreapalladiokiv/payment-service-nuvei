@@ -190,7 +190,7 @@ it('uses one id for clientUniqueId and clientRequestId even when generated', fun
     expect($data['clientUniqueId'])->toBe($data['clientRequestId']);
 });
 
-it('builds purchase data for payment method with UPO and storedCredentials', function () {
+it('pays by UPO alone, sending no stored-credential marker of its own', function () {
     $pm = new PaymentMethod(
         PaymentMethodId::generate(),
         nuveiTestCard(),
@@ -209,8 +209,13 @@ it('builds purchase data for payment method with UPO and storedCredentials', fun
 
     $data = $request->getData();
 
+    // storedCredentialsMode used to ride along on every stored instrument, deriving a
+    // stored-credential claim from the instrument's SHAPE. Their reference says
+    // tokenization users should not send it, and what marks a chain is `isRebilling` —
+    // which travels on authorizeRebilling, not here.
     expect($data['paymentOption']['userPaymentOptionId'])->toBe('upo_12345')
-        ->and($data['paymentOption']['storedCredentials']['storedCredentialsMode'])->toBe('1');
+        ->and($data['paymentOption'])->not->toHaveKey('storedCredentials')
+        ->and($data)->not->toHaveKey('isRebilling');
 });
 
 it('throws on credit card instrument', function () {
