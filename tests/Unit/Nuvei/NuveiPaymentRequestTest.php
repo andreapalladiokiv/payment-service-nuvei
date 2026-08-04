@@ -530,8 +530,8 @@ function rebillingRequest(PaymentInitiation $initiation, ?string $anchor = null,
         'referenceResolver' => nuveiRefResolver('upo_123'),
         'sessionToken' => 'sess',
         'initiation' => $initiation,
-        'storedCredentialReference' => $anchor,
-        'inStoredCredentialSeries' => $inSeries,
+        'rebillingReference' => $anchor,
+        'rebilling' => $inSeries,
     ]);
 
     return $request->getData();

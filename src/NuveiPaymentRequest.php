@@ -203,7 +203,7 @@ abstract class NuveiPaymentRequest extends AbstractRequest implements PaymentIns
     }
 
     /**
-     * The stored-credential chain, as Nuvei's rebilling parameters.
+     * The rebilling chain, as Nuvei's rebilling parameters.
      *
      * AT THE ROOT, and that is sourced rather than guessed. Their own SDK settles it:
      * `Payments\CreditCard::paymentCC()` lists `isRebilling` in the same
@@ -223,14 +223,14 @@ abstract class NuveiPaymentRequest extends AbstractRequest implements PaymentIns
      */
     private function rebilling(): array
     {
-        if (! $this->isInStoredCredentialSeries()) {
+        if (! $this->isRebilling()) {
             // Conditional in their reference — required "when performing
             // recurring/rebilling". A payment outside a series is not that, and "0"
             // here would tell the acquirer to expect renewals that never come.
             return [];
         }
 
-        $anchor = $this->getStoredCredentialReference();
+        $anchor = $this->getRebillingReference();
 
         // "0 – For the first rebilling payment. 1 – For all subsequent rebilling
         // transactions." Position, not who initiated it: a series opened by a present
