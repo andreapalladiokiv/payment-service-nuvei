@@ -7,6 +7,7 @@ namespace Techork\PaymentService\Nuvei;
 use Omnipay\Common\Message\AbstractResponse;
 use Techork\PaymentService\Common\ValueObject\CreditCard\CheckResult;
 use Techork\PaymentService\Gateway\Contract\CardChecksProvider;
+use Techork\PaymentService\Gateway\Contract\StoredCredentialReferenceProvider;
 
 /**
  * Reads either shape {@see CreatePaymentMethodRequest} can produce.
@@ -21,7 +22,7 @@ use Techork\PaymentService\Gateway\Contract\CardChecksProvider;
  * only on that shape. The vault route reports none, which surfaces here as null
  * rather than as a check that passed.
  */
-final class CreatePaymentMethodResponse extends AbstractResponse implements CardChecksProvider
+final class CreatePaymentMethodResponse extends AbstractResponse implements CardChecksProvider, StoredCredentialReferenceProvider
 {
     public function isSuccessful(): bool
     {
@@ -43,6 +44,24 @@ final class CreatePaymentMethodResponse extends AbstractResponse implements Card
         $reference = $this->data['userPaymentOptionId']
             ?? $this->data['paymentOption']['userPaymentOptionId']
             ?? null;
+
+        return $reference === null || $reference === '' ? null : (string) $reference;
+    }
+
+    /**
+     * The zero-amount `Auth` this registration may have placed is the initial CIT
+     * of the stored-credential chain — {@see CreatePaymentMethodRequest::verifyCard}
+     * sends it with `storedCredentialsMode: '0'` — so its `transactionId` is what a
+     * later merchant-initiated payment quotes back as `relatedTransactionId`.
+     *
+     * Only the payment route has one. `addUPOCreditCardByTempToken` is a vault
+     * operation that reaches no issuer and begins no chain, and answers null here
+     * rather than borrowing the UPO id, which would anchor the series to something
+     * the acquirer has never seen as a transaction.
+     */
+    public function getStoredCredentialReference(): ?string
+    {
+        $reference = $this->data['transactionId'] ?? null;
 
         return $reference === null || $reference === '' ? null : (string) $reference;
     }

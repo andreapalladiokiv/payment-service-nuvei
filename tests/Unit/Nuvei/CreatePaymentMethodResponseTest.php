@@ -86,3 +86,43 @@ it('reports a split AVS verdict on each field separately', function () {
         ->and($response->getPostalCodeCheck())->toBe(CheckResult::Fail)
         ->and($response->getCvcCheck())->toBeNull();
 });
+
+// ──────────────────────────────────────────────
+//  The transaction that established the credential
+//
+//  Not the same value as the UPO. The UPO says what to charge next time; this
+//  says which authorization began the series, and a subsequent merchant-initiated
+//  payment has to quote it back as relatedTransactionId. It was in the payload all
+//  along and read by nobody.
+// ──────────────────────────────────────────────
+
+it('surfaces the zero-amount Auth transactionId as the stored-credential anchor', function () {
+    $response = upoResponse([
+        'status' => 'SUCCESS',
+        'transactionStatus' => 'APPROVED',
+        'transactionId' => '1110000000123456',
+        'paymentOption' => ['userPaymentOptionId' => '9001'],
+    ]);
+
+    expect($response->getStoredCredentialReference())->toBe('1110000000123456')
+        // Distinct from the instrument reference — conflating them would anchor
+        // the chain to a vault id the acquirer never saw as a transaction.
+        ->and($response->getTransactionReference())->toBe('9001');
+});
+
+it('anchors nothing on the vault route, which reaches no issuer', function () {
+    $response = upoResponse(['status' => 'SUCCESS', 'userPaymentOptionId' => '4242']);
+
+    expect($response->getStoredCredentialReference())->toBeNull();
+});
+
+it('treats an empty transactionId as no anchor rather than as an empty one', function () {
+    $response = upoResponse([
+        'status' => 'SUCCESS',
+        'transactionStatus' => 'APPROVED',
+        'transactionId' => '',
+        'paymentOption' => ['userPaymentOptionId' => '9001'],
+    ]);
+
+    expect($response->getStoredCredentialReference())->toBeNull();
+});
