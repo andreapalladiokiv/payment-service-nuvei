@@ -113,16 +113,6 @@ final class PayoutRequest extends AbstractRequest implements PaymentInstrumentVi
         throw new RuntimeException('HostedPayment is not a valid retry refund instrument.');
     }
 
-    public function getCustomerReference(): string
-    {
-        return $this->getParameter('customerReference') ?? '';
-    }
-
-    public function setCustomerReference(string $value): self
-    {
-        return $this->setParameter('customerReference', $value);
-    }
-
     #[Override]
     public function sendData($data): AbstractResponse
     {

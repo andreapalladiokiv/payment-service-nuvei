@@ -207,16 +207,6 @@ final class CreatePaymentMethodRequest extends AbstractRequest implements Paymen
         return $this->getCustomerReference();
     }
 
-    public function getCustomerReference(): string
-    {
-        return $this->getParameter('customerReference') ?? '';
-    }
-
-    public function setCustomerReference(string $value): self
-    {
-        return $this->setParameter('customerReference', $value);
-    }
-
     #[Override]
     public function visitHostedPayment(HostedPayment $hosted): never
     {

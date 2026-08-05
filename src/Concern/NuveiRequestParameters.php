@@ -47,6 +47,24 @@ trait NuveiRequestParameters
         return $this->setParameter('billingAddress', $v);
     }
 
+    /**
+     * Lives here rather than in the requests that need it, which is how it came to be missing
+     * from one of them. Three classes declared this pair identically and
+     * {@see \Techork\PaymentService\Nuvei\UpdateCustomerRequest} — the one whose ONLY
+     * parameter this is — did not, so omnipay dropped the option (it applies one only where a
+     * matching `set…()` exists) and every update answered with an empty reference and an
+     * unsuccessful response.
+     */
+    public function getCustomerReference(): string
+    {
+        return $this->getParameter('customerReference') ?? '';
+    }
+
+    public function setCustomerReference(string $value): static
+    {
+        return $this->setParameter('customerReference', $value);
+    }
+
     public function getBillingAddress(): ?BillingAddress
     {
         $address = $this->getParameter('billingAddress');
