@@ -35,7 +35,7 @@ it('delegates to GatewayPaymentMethodRecorder when APPROVED', function () {
     $recorder = Mockery::mock(GatewayPaymentMethodRecorder::class);
     $recorder->shouldReceive('onPaymentMethodRecord')->once()->andReturn(RecorderOutcome::Applied);
 
-    expect((new PaymentMethodCreationHandler($recorder))(pmCreationEvent(), $gatewayId))
+    expect(new PaymentMethodCreationHandler($recorder)(pmCreationEvent(), $gatewayId))
         ->toBe(HandlerOutcome::Processed);
 });
 
@@ -43,7 +43,7 @@ it('returns Skipped when status is not APPROVED', function () {
     $recorder = Mockery::mock(GatewayPaymentMethodRecorder::class);
     $recorder->shouldNotReceive('onPaymentMethodRecord');
 
-    expect((new PaymentMethodCreationHandler($recorder))(pmCreationEvent(['Status' => 'DECLINED']), GatewayId::generate()))
+    expect(new PaymentMethodCreationHandler($recorder)(pmCreationEvent(['Status' => 'DECLINED']), GatewayId::generate()))
         ->toBe(HandlerOutcome::Skipped);
 });
 
@@ -51,6 +51,6 @@ it('returns Skipped when UPO or user token refs are missing', function () {
     $recorder = Mockery::mock(GatewayPaymentMethodRecorder::class);
     $recorder->shouldNotReceive('onPaymentMethodRecord');
 
-    expect((new PaymentMethodCreationHandler($recorder))(pmCreationEvent(['userPaymentOptionId' => '']), GatewayId::generate()))
+    expect(new PaymentMethodCreationHandler($recorder)(pmCreationEvent(['userPaymentOptionId' => '']), GatewayId::generate()))
         ->toBe(HandlerOutcome::Skipped);
 });

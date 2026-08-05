@@ -9,6 +9,7 @@ use Nuvei\Api\RestClient;
 use Nuvei\Api\Service\PaymentService;
 use Omnipay\Common\Message\AbstractRequest;
 use Omnipay\Common\Message\AbstractResponse;
+use Override;
 use Ramsey\Uuid\Uuid;
 use RuntimeException;
 use Techork\PaymentService\Common\Contract\PaymentInstrument;
@@ -24,10 +25,13 @@ use Techork\PaymentService\Gateway\Exception\UnsupportedInstrument;
 use Techork\PaymentService\Gateway\Concern\InstrumentParameters;
 use Techork\PaymentService\Gateway\Contract\GatewayCredential;
 use Techork\PaymentService\Nuvei\Concern\NuveiRequestParameters;
+use Throwable;
 
 /**
  * Base for Nuvei purchase/authorize requests.
  * Subclasses override settleType() and wrapResponse().
+ *
+ * @implements PaymentInstrumentVisitor<array>
  */
 abstract class NuveiPaymentRequest extends AbstractRequest implements PaymentInstrumentVisitor
 {
@@ -40,6 +44,7 @@ abstract class NuveiPaymentRequest extends AbstractRequest implements PaymentIns
 
     abstract protected function wrapResponse(array $result): AbstractResponse;
 
+    #[Override]
     public function getData(): array
     {
         $this->validate('money', 'instrument', 'gateway');
@@ -73,6 +78,11 @@ abstract class NuveiPaymentRequest extends AbstractRequest implements PaymentIns
             if ($missing !== []) {
                 throw IncompleteAuthentication::missingFields('nuvei', $this->operationLabel(), $missing);
             }
+
+            // Restated for the analyser: the collect-then-report form above proves this,
+            // but the proof sits in $missing rather than in the property. Kept that way so
+            // the exception can name every missing field at once instead of the first.
+            assert($threeDS->eci !== null);
 
             $externalMpi = [
                 'eci' => $threeDS->eci->value,
@@ -135,6 +145,7 @@ abstract class NuveiPaymentRequest extends AbstractRequest implements PaymentIns
         return $data;
     }
 
+    #[Override]
     public function visitCreditCard(CreditCard $card): never
     {
         // Nuvei takes card data only through tokenization (createCard /
@@ -142,11 +153,13 @@ abstract class NuveiPaymentRequest extends AbstractRequest implements PaymentIns
         throw UnsupportedInstrument::forGateway('nuvei', $this->operationLabel(), $card);
     }
 
+    #[Override]
     public function visitCash(Cash $cash): never
     {
         throw UnsupportedInstrument::forGateway('nuvei', $this->operationLabel(), $cash);
     }
 
+    #[Override]
     public function visitToken(Token $token): array
     {
         /** @var GatewayCredential $gateway */
@@ -157,6 +170,7 @@ abstract class NuveiPaymentRequest extends AbstractRequest implements PaymentIns
         return ['card' => ['ccTempToken' => $reference]];
     }
 
+    #[Override]
     public function visitPaymentMethod(PaymentMethod $paymentMethod): array
     {
         /** @var GatewayCredential $gateway */
@@ -178,15 +192,16 @@ abstract class NuveiPaymentRequest extends AbstractRequest implements PaymentIns
         return ['userPaymentOptionId' => $reference];
     }
 
+    #[Override]
     public function sendData($data): AbstractResponse
     {
         try {
             /** @var RestClient $client */
             $client = $this->getParameter('restClient');
-            $result = (new PaymentService($client))->createPayment($data);
+            $result = new PaymentService($client)->createPayment($data);
 
             return $this->wrapResponse($result);
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             return $this->wrapResponse(['status' => 'ERROR', 'reason' => $e->getMessage()]);
         }
     }
@@ -201,6 +216,7 @@ abstract class NuveiPaymentRequest extends AbstractRequest implements PaymentIns
         return $this->setParameter('customerReference', $value);
     }
 
+    #[Override]
     public function visitHostedPayment(HostedPayment $hosted): array
     {
         // Only PurchaseRequest overrides this with the real Cashier build;
@@ -225,7 +241,7 @@ abstract class NuveiPaymentRequest extends AbstractRequest implements PaymentIns
      * Not sent here: `rebillFrequency` / `rebillExpiry`. Those belong on the INITIAL
      * 3DS CIT, under `card.threeD.v2AdditionalParams`, not on a subsequent payment.
      *
-     * @return array<string, string>
+     * @return array<string, string|null>
      */
     private function rebilling(): array
     {

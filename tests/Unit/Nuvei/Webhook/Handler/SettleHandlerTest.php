@@ -33,7 +33,7 @@ it('delegates Settle APPROVED to GatewaySuccessRecorder', function () {
     $feeRecorder = Mockery::mock(GatewayFeeRecorder::class);
     $feeRecorder->shouldNotReceive('onPaymentIntentFee');
 
-    expect((new SettleHandler($recorder, $feeRecorder))($event, $gatewayId))->toBe(HandlerOutcome::Processed);
+    expect(new SettleHandler($recorder, $feeRecorder)($event, $gatewayId))->toBe(HandlerOutcome::Processed);
 });
 
 it('returns Skipped when status is not APPROVED', function () {
@@ -49,7 +49,7 @@ it('returns Skipped when status is not APPROVED', function () {
     $feeRecorder = Mockery::mock(GatewayFeeRecorder::class);
     $feeRecorder->shouldNotReceive('onPaymentIntentFee');
 
-    expect((new SettleHandler($recorder, $feeRecorder))($event, GatewayId::generate()))->toBe(HandlerOutcome::Skipped);
+    expect(new SettleHandler($recorder, $feeRecorder)($event, GatewayId::generate()))->toBe(HandlerOutcome::Skipped);
 });
 
 it('strips :capture suffix from clientUniqueId before resolving (idempotency-key convention)', function () {
@@ -73,7 +73,7 @@ it('strips :capture suffix from clientUniqueId before resolving (idempotency-key
     $feeRecorder = Mockery::mock(GatewayFeeRecorder::class);
     $feeRecorder->shouldNotReceive('onPaymentIntentFee');
 
-    expect((new SettleHandler($recorder, $feeRecorder))($event, $gatewayId))->toBe(HandlerOutcome::Processed);
+    expect(new SettleHandler($recorder, $feeRecorder)($event, $gatewayId))->toBe(HandlerOutcome::Processed);
 });
 
 it('forwards feeAmount to FeeRecorder when present and recorder Applied', function () {
@@ -95,7 +95,7 @@ it('forwards feeAmount to FeeRecorder when present and recorder Applied', functi
     $feeRecorder = Mockery::mock(GatewayFeeRecorder::class);
     $feeRecorder->shouldReceive('onPaymentIntentFee')
         ->once()
-        ->withArgs(function (GatewayId $gid, string $pi, Money $fee, DateTimeImmutable $observedAt) use ($gatewayId, $piId) {
+        ->withArgs(function (GatewayId $gid, string $pi, Money $fee) use ($gatewayId, $piId) {
             return $gid->equals($gatewayId)
                 && $pi === $piId
                 && $fee->getAmount() === '3500'
@@ -103,7 +103,7 @@ it('forwards feeAmount to FeeRecorder when present and recorder Applied', functi
         })
         ->andReturn(RecorderOutcome::Applied);
 
-    expect((new SettleHandler($recorder, $feeRecorder))($event, $gatewayId))->toBe(HandlerOutcome::Processed);
+    expect(new SettleHandler($recorder, $feeRecorder)($event, $gatewayId))->toBe(HandlerOutcome::Processed);
 });
 
 it('does not forward fee when feeAmount is absent or zero', function () {
@@ -124,7 +124,7 @@ it('does not forward fee when feeAmount is absent or zero', function () {
     $feeRecorder = Mockery::mock(GatewayFeeRecorder::class);
     $feeRecorder->shouldNotReceive('onPaymentIntentFee');
 
-    expect((new SettleHandler($recorder, $feeRecorder))($event, $gatewayId))->toBe(HandlerOutcome::Processed);
+    expect(new SettleHandler($recorder, $feeRecorder)($event, $gatewayId))->toBe(HandlerOutcome::Processed);
 });
 
 it('does not forward fee when recorder did not Apply (e.g. NotFound)', function () {
@@ -146,5 +146,5 @@ it('does not forward fee when recorder did not Apply (e.g. NotFound)', function 
     $feeRecorder = Mockery::mock(GatewayFeeRecorder::class);
     $feeRecorder->shouldNotReceive('onPaymentIntentFee');
 
-    expect((new SettleHandler($recorder, $feeRecorder))($event, $gatewayId))->toBe(HandlerOutcome::Delay);
+    expect(new SettleHandler($recorder, $feeRecorder)($event, $gatewayId))->toBe(HandlerOutcome::Delay);
 });

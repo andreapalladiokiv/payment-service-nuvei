@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Techork\PaymentService\Nuvei\Webhook;
 
+use Override;
 use Techork\PaymentService\Nuvei\Webhook\Handler\AuthHandler;
 use Techork\PaymentService\Nuvei\Webhook\Handler\CreditHandler;
 use Techork\PaymentService\Nuvei\Webhook\Handler\PaymentMethodCreationHandler;
@@ -29,6 +30,7 @@ final readonly class NuveiWebhookSubscriber implements WebhookSubscriber
         private VoidHandler $void,
     ) {}
 
+    #[Override]
     public function subscribe(VerifierRegistry $verifiers, HandlerRegistry $handlers): void
     {
         $verifiers->register(self::KIND, $this->verifier, $this->parser);

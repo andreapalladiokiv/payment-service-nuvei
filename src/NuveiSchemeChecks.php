@@ -34,7 +34,6 @@ final readonly class NuveiSchemeChecks
             'Z', 'P', 'W' => [CheckResult::Fail, CheckResult::Pass],
             'N', 'C' => [CheckResult::Fail, CheckResult::Fail],
             'U', 'G', 'I', 'R', 'S' => [CheckResult::Unavailable, CheckResult::Unavailable],
-            'E' => [CheckResult::Unchecked, CheckResult::Unchecked],
             default => [CheckResult::Unchecked, CheckResult::Unchecked],
         };
     }
@@ -48,7 +47,6 @@ final readonly class NuveiSchemeChecks
         return match (strtoupper($letter)) {
             'M' => CheckResult::Pass,
             'N', 'S' => CheckResult::Fail,
-            'P' => CheckResult::Unchecked,
             'U', 'X' => CheckResult::Unavailable,
             default => CheckResult::Unchecked,
         };

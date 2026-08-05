@@ -8,6 +8,7 @@ use DateTimeImmutable;
 use Money\Money;
 use Nuvei\Api\Environment;
 use Omnipay\Common\Message\AbstractResponse;
+use Override;
 use Ramsey\Uuid\Uuid;
 use Techork\PaymentService\Common\Contract\PaymentInstrument;
 use Techork\PaymentService\Common\ValueObject\Challenge\RedirectChallenge;
@@ -21,21 +22,25 @@ final class PurchaseRequest extends NuveiPaymentRequest
 
     private const string CASHIER_VERSION = '4.0.0';
 
+    #[Override]
     protected function transactionType(): string
     {
         return 'Sale';
     }
 
+    #[Override]
     protected function settleType(): ?int
     {
         return null;
     }
 
+    #[Override]
     protected function wrapResponse(array $result): AbstractResponse
     {
         return new PurchaseResponse($this, $result);
     }
 
+    #[Override]
     public function getData(): array
     {
         $this->validate('money', 'instrument', 'gateway');
@@ -57,6 +62,7 @@ final class PurchaseRequest extends NuveiPaymentRequest
      * made here — all coordination happens through the form fields and the
      * subsequent {@see Webhook\Handler\SaleHandler} on the DMN side.
      */
+    #[Override]
     public function visitHostedPayment(HostedPayment $hosted): array
     {
         /** @var Money $money */
@@ -113,6 +119,7 @@ final class PurchaseRequest extends NuveiPaymentRequest
         ];
     }
 
+    #[Override]
     public function sendData($data): AbstractResponse
     {
         if (! empty($data['_hosted'])) {

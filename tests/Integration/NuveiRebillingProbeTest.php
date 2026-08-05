@@ -3,6 +3,10 @@
 declare(strict_types=1);
 
 use Nuvei\Api\Environment;
+use Nuvei\Api\Exception\ConfigurationException;
+use Nuvei\Api\Exception\ConnectionException;
+use Nuvei\Api\Exception\ResponseException;
+use Nuvei\Api\Exception\ValidationException;
 use Nuvei\Api\RestClient;
 use Techork\PaymentService\Nuvei\NuveiPaymentService;
 
@@ -171,6 +175,10 @@ function nuveiProbeRead(array $result): array
  * the anchor under test is the one production would actually have.
  *
  * @return array{upo: ?string, anchor: ?string, read: array{outcome: string, detail: string, transactionId: ?string}}
+ * @throws ConfigurationException
+ * @throws ConnectionException
+ * @throws ResponseException
+ * @throws ValidationException
  */
 function nuveiProbeRegister(): array
 {

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Techork\PaymentService\Nuvei;
 
+use Override;
 use Techork\PaymentService\Nuvei\Concern\NuveiRequestParameters;
 use Omnipay\Common\Message\AbstractRequest;
 
@@ -15,6 +16,7 @@ final class UpdateCustomerRequest extends AbstractRequest
 {
     use NuveiRequestParameters;
 
+    #[Override]
     public function getData(): array
     {
         return [
@@ -22,6 +24,7 @@ final class UpdateCustomerRequest extends AbstractRequest
         ];
     }
 
+    #[Override]
     public function sendData($data): CreateCustomerResponse
     {
         return new CreateCustomerResponse($this, [

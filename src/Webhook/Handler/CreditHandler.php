@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Techork\PaymentService\Nuvei\Webhook\Handler;
 
 use DateTimeImmutable;
+use Override;
 use Techork\PaymentService\Nuvei\Webhook\DTO\NuveiEvent;
 use Techork\PaymentService\Gateway\ValueObject\GatewayId;
 use Techork\PaymentService\Gateway\Webhook\Contract\HandlerOutcome;
@@ -35,6 +36,7 @@ final readonly class CreditHandler implements WebhookEventHandler
         private GatewayFeeRecorder $feeRecorder,
     ) {}
 
+    #[Override]
     public function __invoke(object $event, GatewayId $gatewayId): HandlerOutcome
     {
         /** @var NuveiEvent $event */

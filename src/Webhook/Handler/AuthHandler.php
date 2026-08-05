@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Techork\PaymentService\Nuvei\Webhook\Handler;
 
+use Override;
 use Techork\PaymentService\Gateway\Webhook\Contract\HandlerOutcome;
 use Techork\PaymentService\Gateway\Webhook\Contract\WebhookEventHandler;
 use Techork\PaymentService\Nuvei\Webhook\DTO\NuveiEvent;
@@ -35,6 +36,7 @@ final readonly class AuthHandler implements WebhookEventHandler
         private LoggerInterface $logger,
     ) {}
 
+    #[Override]
     public function __invoke(object $event, GatewayId $gatewayId): HandlerOutcome
     {
         /** @var NuveiEvent $event */

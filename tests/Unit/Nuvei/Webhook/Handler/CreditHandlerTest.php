@@ -44,7 +44,7 @@ it('delegates Credit APPROVED to RefundProcessingRecorder', function () {
         'currency' => 'USD',
     ]);
 
-    expect((new CreditHandler($resolver, $processing, $failure, $feeRecorder))($event, $gatewayId))
+    expect(new CreditHandler($resolver, $processing, $failure, $feeRecorder)($event, $gatewayId))
         ->toBe(HandlerOutcome::Processed);
 });
 
@@ -69,7 +69,7 @@ it('delegates Credit DECLINED to RefundFailureRecorder', function () {
         'Reason' => 'Refund declined',
     ]);
 
-    expect((new CreditHandler($resolver, $processing, $failure, $feeRecorder))($event, GatewayId::generate()))
+    expect(new CreditHandler($resolver, $processing, $failure, $feeRecorder)($event, GatewayId::generate()))
         ->toBe(HandlerOutcome::Processed);
 });
 
@@ -127,7 +127,7 @@ it('forwards feeAmount to FeeRecorder when refund is APPROVED and resolveRefund 
     $feeRecorder = Mockery::mock(GatewayFeeRecorder::class);
     $feeRecorder->shouldReceive('onRefundFee')
         ->once()
-        ->withArgs(function (GatewayId $gid, string $rid, Money $fee, DateTimeImmutable $observedAt) use ($gatewayId, $refundId) {
+        ->withArgs(function (GatewayId $gid, string $rid, Money $fee) use ($gatewayId, $refundId) {
             return $gid->equals($gatewayId)
                 && $rid === $refundId
                 && $fee->getAmount() === '1200'
@@ -145,7 +145,7 @@ it('forwards feeAmount to FeeRecorder when refund is APPROVED and resolveRefund 
         'currency' => 'USD',
     ]);
 
-    expect((new CreditHandler($resolver, $processing, Mockery::mock(RefundFailureRecorder::class), $feeRecorder))($event, $gatewayId))
+    expect(new CreditHandler($resolver, $processing, Mockery::mock(RefundFailureRecorder::class), $feeRecorder)($event, $gatewayId))
         ->toBe(HandlerOutcome::Processed);
 });
 
@@ -173,6 +173,6 @@ it('skips fee forwarding when our refund id cannot be resolved (avoids creating 
         'currency' => 'USD',
     ]);
 
-    expect((new CreditHandler($resolver, $processing, Mockery::mock(RefundFailureRecorder::class), $feeRecorder))($event, $gatewayId))
+    expect(new CreditHandler($resolver, $processing, Mockery::mock(RefundFailureRecorder::class), $feeRecorder)($event, $gatewayId))
         ->toBe(HandlerOutcome::Processed);
 });

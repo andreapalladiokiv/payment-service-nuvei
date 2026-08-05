@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Techork\PaymentService\Nuvei\Webhook;
 
+use Override;
 use Techork\PaymentService\Gateway\Webhook\Contract\SignatureVerifier;
 use Psr\Http\Message\ServerRequestInterface;
 use Techork\PaymentService\Gateway\Contract\GatewayCredential;
@@ -27,6 +28,7 @@ use Techork\PaymentService\Gateway\Contract\GatewayCredential;
  */
 final readonly class ChecksumVerifier implements SignatureVerifier
 {
+    #[Override]
     public function verify(ServerRequestInterface $request, GatewayCredential $gateway): bool
     {
         $payload = $request->getParsedBody();

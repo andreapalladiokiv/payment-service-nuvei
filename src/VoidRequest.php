@@ -6,8 +6,10 @@ namespace Techork\PaymentService\Nuvei;
 
 use Nuvei\Api\RestClient;
 use Omnipay\Common\Message\AbstractRequest;
+use Override;
 use Ramsey\Uuid\Uuid;
 use Techork\PaymentService\Nuvei\Concern\NuveiRequestParameters;
+use Throwable;
 
 /**
  * Voids (cancels) a Nuvei transaction by relatedTransactionId.
@@ -23,6 +25,7 @@ final class VoidRequest extends AbstractRequest
 {
     use NuveiRequestParameters;
 
+    #[Override]
     public function getData(): array
     {
         $this->validate('transactionReference');
@@ -36,15 +39,16 @@ final class VoidRequest extends AbstractRequest
         ];
     }
 
+    #[Override]
     public function sendData($data): VoidResponse
     {
         try {
             /** @var RestClient $client */
             $client = $this->getParameter('restClient');
-            $result = (new NuveiPaymentService($client))->voidTransaction($data);
+            $result = new NuveiPaymentService($client)->voidTransaction($data);
 
             return new VoidResponse($this, $result);
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             return new VoidResponse($this, ['status' => 'ERROR', 'reason' => $e->getMessage()]);
         }
     }

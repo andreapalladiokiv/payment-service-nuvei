@@ -4,8 +4,11 @@ declare(strict_types=1);
 
 namespace Techork\PaymentService\Nuvei;
 
+use RuntimeException;
+
 use Nuvei\Api\Service\PaymentService;
 use Nuvei\Api\Utils;
+use Override;
 
 /**
  * Patched {@see PaymentService} that fixes Nuvei's PHP SDK bug where
@@ -24,7 +27,7 @@ use Nuvei\Api\Utils;
  */
 final class NuveiPaymentService extends PaymentService
 {
-    private const VOID_CHECKSUM_ORDER = [
+    private const array VOID_CHECKSUM_ORDER = [
         'merchantId',
         'merchantSiteId',
         'clientRequestId',
@@ -42,6 +45,7 @@ final class NuveiPaymentService extends PaymentService
     /**
      * @inheritDoc
      */
+    #[Override]
     public function voidTransaction(array $params)
     {
         $mandatoryFields = [
@@ -55,11 +59,14 @@ final class NuveiPaymentService extends PaymentService
 
         $params = $this->appendMerchantIdMerchantSiteIdTimeStamp($params);
 
+        $config = $this->client->getConfig()
+            ?? throw new RuntimeException('The Nuvei client carries no configuration, so no checksum can be computed.');
+
         $params['checksum'] = Utils::calculateChecksum(
             $params,
             self::VOID_CHECKSUM_ORDER,
-            $this->client->getConfig()->getMerchantSecretKey(),
-            $this->client->getConfig()->getHashAlgorithm(),
+            $config->getMerchantSecretKey(),
+            $config->getHashAlgorithm(),
         );
 
         $this->validate($params, $mandatoryFields);

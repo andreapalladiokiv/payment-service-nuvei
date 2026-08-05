@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Techork\PaymentService\Nuvei\Webhook\Handler;
 
+use Override;
 use Techork\PaymentService\Nuvei\Webhook\DTO\NuveiEvent;
 use Techork\PaymentService\Gateway\ValueObject\GatewayId;
 use Techork\PaymentService\Gateway\Webhook\Contract\HandlerOutcome;
@@ -33,6 +34,7 @@ final readonly class SaleHandler implements WebhookEventHandler
         private GatewayFailureRecorder $failureRecorder,
     ) {}
 
+    #[Override]
     public function __invoke(object $event, GatewayId $gatewayId): HandlerOutcome
     {
         /** @var NuveiEvent $event */

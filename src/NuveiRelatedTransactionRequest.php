@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Techork\PaymentService\Nuvei;
 
+use Override;
 use Techork\PaymentService\Nuvei\Concern\NuveiRequestParameters;
 use Ramsey\Uuid\Uuid;
 use Money\Money;
@@ -11,6 +12,7 @@ use Nuvei\Api\RestClient;
 use Nuvei\Api\Service\PaymentService;
 use Omnipay\Common\Message\AbstractRequest;
 use Omnipay\Common\Message\AbstractResponse;
+use Throwable;
 
 /**
  * Base for Nuvei capture/refund requests that operate on existing transactions.
@@ -23,6 +25,7 @@ abstract class NuveiRelatedTransactionRequest extends AbstractRequest
 
     abstract protected function wrapResponse(array $result): AbstractResponse;
 
+    #[Override]
     public function getData(): array
     {
         $this->validate('money', 'transactionReference');
@@ -38,6 +41,7 @@ abstract class NuveiRelatedTransactionRequest extends AbstractRequest
         ];
     }
 
+    #[Override]
     public function sendData($data): AbstractResponse
     {
         try {
@@ -46,7 +50,7 @@ abstract class NuveiRelatedTransactionRequest extends AbstractRequest
             $result = $this->executeService(new PaymentService($client), $data);
 
             return $this->wrapResponse($result);
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             return $this->wrapResponse(['status' => 'ERROR', 'reason' => $e->getMessage()]);
         }
     }

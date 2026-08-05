@@ -27,7 +27,7 @@ it('cancels the linked PaymentIntent on Void APPROVED', function () {
         'relatedTransactionId' => 'ppp_orig',
     ]);
 
-    expect((new VoidHandler($resolver, $recorder))($event, $gatewayId))->toBe(HandlerOutcome::Processed);
+    expect(new VoidHandler($resolver, $recorder)($event, $gatewayId))->toBe(HandlerOutcome::Processed);
 });
 
 it('returns Skipped when status is not APPROVED', function () {

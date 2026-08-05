@@ -4,6 +4,11 @@ declare(strict_types=1);
 
 namespace Techork\PaymentService\Nuvei;
 
+use Nuvei\Api\Exception\ConfigurationException;
+use Nuvei\Api\Exception\ConnectionException;
+use Nuvei\Api\Exception\ResponseException;
+use Nuvei\Api\Exception\ValidationException;
+use Override;
 use Techork\PaymentService\Gateway\Concern\InstrumentParameters;
 use Techork\PaymentService\Nuvei\Concern\NuveiRequestParameters;
 use Techork\PaymentService\Gateway\Contract\GatewayCredential;
@@ -20,6 +25,7 @@ use Techork\PaymentService\Common\ValueObject\HostedPayment;
 use Techork\PaymentService\Common\ValueObject\PaymentMethod;
 use Techork\PaymentService\Common\ValueObject\Token;
 use Techork\PaymentService\Gateway\Exception\UnsupportedInstrument;
+use Throwable;
 use ValueError;
 
 /**
@@ -39,6 +45,8 @@ use ValueError;
  * expected and useful.
  *
  * Expects: instrument (Token or CreditCard), gateway (Gateway), userTokenId.
+ *
+ * @implements PaymentInstrumentVisitor<array>
  */
 final class CreatePaymentMethodRequest extends AbstractRequest implements PaymentInstrumentVisitor
 {
@@ -52,6 +60,7 @@ final class CreatePaymentMethodRequest extends AbstractRequest implements Paymen
      */
     private const string VERIFICATION_CURRENCY = 'USD';
 
+    #[Override]
     public function getData(): array
     {
         /** @var PaymentInstrument $instrument */
@@ -66,6 +75,7 @@ final class CreatePaymentMethodRequest extends AbstractRequest implements Paymen
     /**
      * @return array{paymentOption: array{card: array<string, mixed>}}
      */
+    #[Override]
     public function visitCreditCard(CreditCard $card): array
     {
         $decrypter = $this->getDecrypter();
@@ -83,6 +93,7 @@ final class CreatePaymentMethodRequest extends AbstractRequest implements Paymen
         ];
     }
 
+    #[Override]
     public function visitCash(Cash $cash): never
     {
         throw new ValueError('Nuvei does not support cash for payment method creation.');
@@ -91,6 +102,7 @@ final class CreatePaymentMethodRequest extends AbstractRequest implements Paymen
     /**
      * @return array{ccTempToken: string}
      */
+    #[Override]
     public function visitToken(Token $token): array
     {
         /** @var GatewayCredential $gateway */
@@ -102,11 +114,13 @@ final class CreatePaymentMethodRequest extends AbstractRequest implements Paymen
         ];
     }
 
+    #[Override]
     public function visitPaymentMethod(PaymentMethod $paymentMethod): never
     {
         throw new RuntimeException('PaymentMethod cannot be converted to UPO via Nuvei.');
     }
 
+    #[Override]
     public function sendData($data): CreatePaymentMethodResponse
     {
         try {
@@ -118,14 +132,19 @@ final class CreatePaymentMethodRequest extends AbstractRequest implements Paymen
                 : $this->verifyCard($client, $data);
 
             return new CreatePaymentMethodResponse($this, $result);
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             return new CreatePaymentMethodResponse($this, ['status' => 'ERROR', 'reason' => $e->getMessage()]);
         }
     }
 
     /**
-     * @param  array<string, mixed>  $data
+     * @param RestClient $client
+     * @param array<string, mixed> $data
      * @return array<string, mixed>
+     * @throws ConfigurationException
+     * @throws ConnectionException
+     * @throws ResponseException
+     * @throws ValidationException
      */
     private function convertTempToken(RestClient $client, array $data): array
     {
@@ -151,12 +170,17 @@ final class CreatePaymentMethodRequest extends AbstractRequest implements Paymen
      * It does NOT establish the MIT chain, and the note that used to stand here
      * claiming it did was wrong: what marks a chain is `isRebilling`, and that travels
      * on `authorizeRebilling`. Payments accordingly send no stored-credential marker at
-     * all now — {@see \Techork\PaymentService\Nuvei\NuveiPaymentRequest::visitPaymentMethod}
+     * all now — {@see NuveiPaymentRequest::visitPaymentMethod}
      * used to attach mode `'1'` to every stored instrument, deriving a
      * stored-credential claim from the instrument's shape rather than from the payment.
      *
-     * @param  array<string, mixed>  $data
+     * @param RestClient $client
+     * @param array<string, mixed> $data
      * @return array<string, mixed>
+     * @throws ConfigurationException
+     * @throws ConnectionException
+     * @throws ResponseException
+     * @throws ValidationException
      */
     private function verifyCard(RestClient $client, array $data): array
     {
@@ -193,6 +217,7 @@ final class CreatePaymentMethodRequest extends AbstractRequest implements Paymen
         return $this->setParameter('customerReference', $value);
     }
 
+    #[Override]
     public function visitHostedPayment(HostedPayment $hosted): never
     {
         throw UnsupportedInstrument::forGateway('nuvei', 'createPaymentMethod', $hosted);

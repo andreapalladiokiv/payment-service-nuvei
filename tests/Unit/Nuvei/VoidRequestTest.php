@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Omnipay\Common\Exception\InvalidRequestException;
 use Omnipay\Common\Http\PsrClient as OmnipayClient;
 use Symfony\Component\HttpFoundation\Request as HttpRequest;
 use Techork\PaymentService\Nuvei\VoidRequest;
@@ -41,7 +42,7 @@ it('reuses clientUniqueId for both clientUniqueId and clientRequestId', function
 
 it('requires transactionReference', function () {
     $request = new VoidRequest(new OmnipayClient, new HttpRequest);
-    $request->initialize([]);
+    $request->initialize();
 
     $request->getData();
-})->throws(\Omnipay\Common\Exception\InvalidRequestException::class);
+})->throws(InvalidRequestException::class);

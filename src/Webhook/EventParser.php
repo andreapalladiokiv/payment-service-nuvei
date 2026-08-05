@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Techork\PaymentService\Nuvei\Webhook;
 
+use Override;
 use Techork\PaymentService\Nuvei\Webhook\DTO\NuveiEvent;
 use Techork\PaymentService\Gateway\Webhook\Contract\EventParser as EventParserContract;
 use Techork\PaymentService\Gateway\Webhook\Contract\ParsedEvent;
@@ -27,6 +28,7 @@ final readonly class EventParser implements EventParserContract
 
     public const string TYPE_VOID = 'Void';
 
+    #[Override]
     public function parse(array $payload): ParsedEvent
     {
         $event = new NuveiEvent($payload);

@@ -9,6 +9,7 @@ use Money\Currency;
 use Money\Money;
 use Money\Parser\DecimalMoneyParser;
 use Omnipay\Common\Message\AbstractResponse;
+use Override;
 use Techork\PaymentService\Common\Contract\Challenge;
 use Techork\PaymentService\Common\ValueObject\Challenge\ThreeDSChallenge;
 use Techork\PaymentService\Common\ValueObject\CreditCard\CheckResult;
@@ -18,17 +19,20 @@ use Techork\PaymentService\Gateway\Contract\ConvertedAmountProvider;
 
 class NuveiTransactionResponse extends AbstractResponse implements CardChecksProvider, ChallengeProvider, ConvertedAmountProvider
 {
+    #[Override]
     public function isSuccessful(): bool
     {
         return ($this->data['status'] ?? '') === 'SUCCESS'
             && ($this->data['transactionStatus'] ?? '') === 'APPROVED';
     }
 
+    #[Override]
     public function getTransactionReference(): ?string
     {
         return isset($this->data['transactionId']) ? (string) $this->data['transactionId'] : null;
     }
 
+    #[Override]
     public function getMessage(): ?string
     {
         if (! empty($this->data['reason'])) {
@@ -51,6 +55,7 @@ class NuveiTransactionResponse extends AbstractResponse implements CardChecksPro
      * as decimal strings, so parse against the converted currency's ISO scale.
      * Null when no conversion block is present.
      */
+    #[Override]
     public function getConvertedAmount(): ?Money
     {
         $conversion = $this->data['currencyConversion'] ?? null;
@@ -58,27 +63,36 @@ class NuveiTransactionResponse extends AbstractResponse implements CardChecksPro
             return null;
         }
 
-        $amount = $conversion['convertedAmount'] ?? null;
-        $currency = $conversion['convertedCurrency'] ?? null;
-        if ($amount === null || $amount === '' || $currency === null || $currency === '') {
+        // Cast first, check second. The other order left the guard proving something about
+        // the raw payload value while the cast handed a fresh, unchecked string to Currency.
+        $amount = (string) ($conversion['convertedAmount'] ?? '');
+        $currency = (string) ($conversion['convertedCurrency'] ?? '');
+
+        if ($amount === '' || $currency === '') {
             return null;
         }
 
-        return (new DecimalMoneyParser(new ISOCurrencies()))
-            ->parse((string) $amount, new Currency((string) $currency));
+        return new DecimalMoneyParser(new ISOCurrencies())
+            ->parse($amount, new Currency($currency));
     }
 
+    #[Override]
     public function getChallenge(): ?Challenge
     {
         if (isset($this->data['challenge']) && $this->data['challenge'] instanceof Challenge) {
             return $this->data['challenge'];
         }
 
+        // Narrowed once: everything below indexes it, and an absent or non-array threeD
+        // block behaves identically to an empty one.
         $threeD = $this->data['paymentOption']['card']['threeD'] ?? null;
+        $threeD = is_array($threeD) ? $threeD : [];
+
         $redirectUrl = $this->data['paymentOption']['redirectUrl'] ?? null;
         $acsUrl = $threeD['acsUrl'] ?? $redirectUrl;
+        $reference = $this->getTransactionReference();
 
-        if ($acsUrl === null || $this->getTransactionReference() === null) {
+        if ($acsUrl === null || $reference === null) {
             return null;
         }
 
@@ -90,12 +104,13 @@ class NuveiTransactionResponse extends AbstractResponse implements CardChecksPro
         }
 
         return new ThreeDSChallenge(
-            transactionId: $this->getTransactionReference(),
+            transactionId: $reference,
             acsUrl: $acsUrl,
             creq: $threeD['cReq'] ?? $threeD['creq'] ?? null,
         );
     }
 
+    #[Override]
     public function getAddressLineCheck(): ?CheckResult
     {
         $avs = $this->avsLetter();
@@ -107,6 +122,7 @@ class NuveiTransactionResponse extends AbstractResponse implements CardChecksPro
         return NuveiSchemeChecks::avsToLineAndPostal($avs)[0];
     }
 
+    #[Override]
     public function getPostalCodeCheck(): ?CheckResult
     {
         $avs = $this->avsLetter();
@@ -118,6 +134,7 @@ class NuveiTransactionResponse extends AbstractResponse implements CardChecksPro
         return NuveiSchemeChecks::avsToLineAndPostal($avs)[1];
     }
 
+    #[Override]
     public function getCvcCheck(): ?CheckResult
     {
         $cvv = $this->data['paymentOption']['card']['cvv2Reply'] ?? null;

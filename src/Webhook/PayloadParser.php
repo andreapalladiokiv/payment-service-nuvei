@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Techork\PaymentService\Nuvei\Webhook;
 
+use DateMalformedStringException;
 use Techork\PaymentService\Common\ShreddingStubs;
 use Techork\PaymentService\Common\ValueObject\BillingAddress;
 use Techork\PaymentService\Common\ValueObject\CardBrand;
@@ -24,7 +25,9 @@ use Techork\PaymentService\Common\ValueObject\State;
 final readonly class PayloadParser
 {
     /**
-     * @param  array<string, mixed>  $payload
+     * @param array<string, mixed> $payload
+     * @return CreditCard|null
+     * @throws DateMalformedStringException
      */
     public static function creditCard(array $payload): ?CreditCard
     {

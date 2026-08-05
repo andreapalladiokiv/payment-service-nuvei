@@ -133,6 +133,6 @@ final readonly class NuveiEvent
             );
         }
 
-        return (new DecimalMoneyParser(new ISOCurrencies))->parse($raw, new Currency($code));
+        return new DecimalMoneyParser(new ISOCurrencies)->parse($raw, new Currency($code));
     }
 }

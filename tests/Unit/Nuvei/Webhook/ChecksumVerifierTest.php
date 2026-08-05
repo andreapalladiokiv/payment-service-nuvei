@@ -10,12 +10,12 @@ use Techork\PaymentService\Gateway\ValueObject\GatewayId;
 
 function checksumCredential(string $merchantId, string $siteId, string $secret): GatewayCredential
 {
-    return new class($merchantId, $siteId, $secret) implements GatewayCredential
+    return new readonly class($merchantId, $siteId, $secret) implements GatewayCredential
     {
         public function __construct(
-            private readonly string $merchantId,
-            private readonly string $siteId,
-            private readonly string $secret,
+            private string $merchantId,
+            private string $siteId,
+            private string $secret,
         ) {}
 
         public function getId(): GatewayId

@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace Techork\PaymentService\Nuvei;
 
+use Override;
 use Techork\PaymentService\Nuvei\Concern\NuveiRequestParameters;
 use Nuvei\Api\RestClient;
 use Nuvei\Api\Service\UserService;
 use Omnipay\Common\Message\AbstractRequest;
+use Throwable;
 
 /**
  * Creates a Nuvei user via UserService::createUser().
@@ -18,6 +20,7 @@ final class CreateCustomerRequest extends AbstractRequest
 {
     use NuveiRequestParameters;
 
+    #[Override]
     public function getData(): array
     {
         return array_filter([
@@ -34,13 +37,14 @@ final class CreateCustomerRequest extends AbstractRequest
         ]);
     }
 
+    #[Override]
     public function sendData($data): CreateCustomerResponse
     {
         try {
             /** @var RestClient $client */
             $client = $this->getParameter('restClient');
 
-            $result = (new UserService($client))->createUser($data);
+            $result = new UserService($client)->createUser($data);
 
             if (($result['status'] ?? '') === 'SUCCESS') {
                 return new CreateCustomerResponse($this, [
@@ -52,7 +56,7 @@ final class CreateCustomerRequest extends AbstractRequest
                 'reference' => null,
                 'error' => $result['reason'] ?? 'Nuvei createUser failed',
             ]);
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             return new CreateCustomerResponse($this, [
                 'reference' => null,
                 'error' => $e->getMessage(),

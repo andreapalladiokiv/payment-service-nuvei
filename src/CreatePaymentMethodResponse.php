@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Techork\PaymentService\Nuvei;
 
 use Omnipay\Common\Message\AbstractResponse;
+use Override;
 use Techork\PaymentService\Common\ValueObject\CreditCard\CheckResult;
 use Techork\PaymentService\Gateway\Contract\CardChecksProvider;
 
@@ -23,6 +24,7 @@ use Techork\PaymentService\Gateway\Contract\CardChecksProvider;
  */
 final class CreatePaymentMethodResponse extends AbstractResponse implements CardChecksProvider
 {
+    #[Override]
     public function isSuccessful(): bool
     {
         if (($this->data['status'] ?? '') !== 'SUCCESS') {
@@ -38,6 +40,7 @@ final class CreatePaymentMethodResponse extends AbstractResponse implements Card
         return $this->getTransactionReference() !== null;
     }
 
+    #[Override]
     public function getTransactionReference(): ?string
     {
         $reference = $this->data['userPaymentOptionId']
@@ -47,6 +50,7 @@ final class CreatePaymentMethodResponse extends AbstractResponse implements Card
         return $reference === null || $reference === '' ? null : (string) $reference;
     }
 
+    #[Override]
     public function getMessage(): ?string
     {
         return $this->data['reason']
@@ -56,16 +60,19 @@ final class CreatePaymentMethodResponse extends AbstractResponse implements Card
             ?? null;
     }
 
+    #[Override]
     public function getAddressLineCheck(): ?CheckResult
     {
         return $this->avs()[0];
     }
 
+    #[Override]
     public function getPostalCodeCheck(): ?CheckResult
     {
         return $this->avs()[1];
     }
 
+    #[Override]
     public function getCvcCheck(): ?CheckResult
     {
         $cvv = $this->data['paymentOption']['card']['cvv2Reply'] ?? null;

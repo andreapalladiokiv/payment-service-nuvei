@@ -11,6 +11,7 @@ use Nuvei\Api\Service\PaymentService;
 use Nuvei\Api\Utils;
 use Omnipay\Common\Message\AbstractRequest;
 use Omnipay\Common\Message\AbstractResponse;
+use Override;
 use Ramsey\Uuid\Uuid;
 use RuntimeException;
 use Techork\PaymentService\Common\Contract\PaymentInstrument;
@@ -23,6 +24,7 @@ use Techork\PaymentService\Common\ValueObject\Token;
 use Techork\PaymentService\Gateway\Concern\InstrumentParameters;
 use Techork\PaymentService\Gateway\Contract\GatewayCredential;
 use Techork\PaymentService\Nuvei\Concern\NuveiRequestParameters;
+use Throwable;
 
 /**
  * Retries a refund onto an alternative instrument via Nuvei's Payout
@@ -35,12 +37,15 @@ use Techork\PaymentService\Nuvei\Concern\NuveiRequestParameters;
  * Nuvei-side ccTempToken or a stored payment method instead.
  *
  * Expects: money, instrument (Token or PaymentMethod), gateway.
+ *
+ * @implements PaymentInstrumentVisitor<array>
  */
 final class PayoutRequest extends AbstractRequest implements PaymentInstrumentVisitor
 {
     use InstrumentParameters;
     use NuveiRequestParameters;
 
+    #[Override]
     public function getData(): array
     {
         $this->validate('money', 'instrument', 'gateway');
@@ -65,6 +70,7 @@ final class PayoutRequest extends AbstractRequest implements PaymentInstrumentVi
         ];
     }
 
+    #[Override]
     public function visitCreditCard(CreditCard $card): never
     {
         throw new RuntimeException(
@@ -73,11 +79,13 @@ final class PayoutRequest extends AbstractRequest implements PaymentInstrumentVi
         );
     }
 
+    #[Override]
     public function visitCash(Cash $cash): never
     {
         throw new RuntimeException('Cash is not a valid retry refund instrument.');
     }
 
+    #[Override]
     public function visitToken(Token $token): array
     {
         /** @var GatewayCredential $gateway */
@@ -88,6 +96,7 @@ final class PayoutRequest extends AbstractRequest implements PaymentInstrumentVi
         return ['userPaymentOptionId' => $reference];
     }
 
+    #[Override]
     public function visitPaymentMethod(PaymentMethod $paymentMethod): array
     {
         /** @var GatewayCredential $gateway */
@@ -98,6 +107,7 @@ final class PayoutRequest extends AbstractRequest implements PaymentInstrumentVi
         return ['userPaymentOptionId' => $reference];
     }
 
+    #[Override]
     public function visitHostedPayment(HostedPayment $hosted): never
     {
         throw new RuntimeException('HostedPayment is not a valid retry refund instrument.');
@@ -113,6 +123,7 @@ final class PayoutRequest extends AbstractRequest implements PaymentInstrumentVi
         return $this->setParameter('customerReference', $value);
     }
 
+    #[Override]
     public function sendData($data): AbstractResponse
     {
         try {
@@ -120,7 +131,8 @@ final class PayoutRequest extends AbstractRequest implements PaymentInstrumentVi
             $client = $this->getParameter('restClient');
 
             $service = new PaymentService($client);
-            $config = $client->getConfig();
+            $config = $client->getConfig()
+                ?? throw new RuntimeException('The Nuvei client carries no configuration, so a payout cannot be addressed.');
 
             $data['merchantId'] = $config->getMerchantId();
             $data['merchantSiteId'] = $config->getMerchantSiteId();
@@ -146,7 +158,7 @@ final class PayoutRequest extends AbstractRequest implements PaymentInstrumentVi
             $result = $service->requestJson($data, 'payout.do');
 
             return new RefundResponse($this, $result);
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             return new RefundResponse($this, ['status' => 'ERROR', 'reason' => $e->getMessage()]);
         }
     }
