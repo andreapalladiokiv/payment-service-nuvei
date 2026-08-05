@@ -13,6 +13,7 @@ use Nuvei\Api\RestClient;
 use Nuvei\Api\Service\Payments\CreditCard as NuveiCreditCardService;
 use Omnipay\Common\AbstractGateway;
 use Omnipay\Common\Message\AbstractRequest;
+use Override;
 use RuntimeException;
 use Techork\PaymentService\Common\Contract\PaymentInstrument;
 use Techork\PaymentService\Common\ValueObject\BillingAddress;
@@ -26,16 +27,19 @@ final class NuveiGateway extends AbstractGateway implements Gateway
 
     private ?CustomerRepository $customerRepository = null;
 
+    #[Override]
     public function getName(): string
     {
         return 'nuvei';
     }
 
+    #[Override]
     public function setCustomerRepository(CustomerRepository $repository): void
     {
         $this->customerRepository = $repository;
     }
 
+    #[Override]
     public function getDefaultParameters(): array
     {
         return [
@@ -108,6 +112,7 @@ final class NuveiGateway extends AbstractGateway implements Gateway
      * @throws ConfigurationException
      * @throws ValidationException
      */
+    #[Override]
     public function initialize(array $parameters = []): static
     {
         parent::initialize($parameters);
@@ -140,98 +145,105 @@ final class NuveiGateway extends AbstractGateway implements Gateway
         return $this->createRequest(UpdateCustomerRequest::class, $parameters);
     }
 
-    public function createCard(array $parameters = []): AbstractRequest
+    public function createCard(array $options = []): AbstractRequest
     {
-        return $this->createRequest(CreateCardRequest::class, $parameters);
+        return $this->createRequest(CreateCardRequest::class, $options);
     }
 
-    public function createPaymentMethod(array $parameters = []): AbstractRequest
-    {
-        $customerReference = $this->resolveCustomerReference(
-            $parameters['gateway'] ?? null,
-            $parameters['instrument'] ?? null,
-            $parameters['billingAddress'] ?? null,
-        );
-        if ($customerReference !== null) {
-            $parameters['customerReference'] = $customerReference;
-        }
-
-        return $this->createRequest(CreatePaymentMethodRequest::class, $parameters);
-    }
-
-    public function purchase(array $parameters = []): AbstractRequest
+    #[Override]
+    public function createPaymentMethod(array $options = []): AbstractRequest
     {
         $customerReference = $this->resolveCustomerReference(
-            $parameters['gateway'] ?? null,
-            $parameters['instrument'] ?? null,
-            $parameters['billingAddress'] ?? null,
+            $options['gateway'] ?? null,
+            $options['instrument'] ?? null,
+            $options['billingAddress'] ?? null,
         );
         if ($customerReference !== null) {
-            $parameters['customerReference'] = $customerReference;
+            $options['customerReference'] = $customerReference;
         }
 
-        return $this->createRequest(PurchaseRequest::class, $parameters);
+        return $this->createRequest(CreatePaymentMethodRequest::class, $options);
     }
 
-    public function authorize(array $parameters = []): AbstractRequest
+    public function purchase(array $options = []): AbstractRequest
     {
         $customerReference = $this->resolveCustomerReference(
-            $parameters['gateway'] ?? null,
-            $parameters['instrument'] ?? null,
-            $parameters['billingAddress'] ?? null,
+            $options['gateway'] ?? null,
+            $options['instrument'] ?? null,
+            $options['billingAddress'] ?? null,
         );
         if ($customerReference !== null) {
-            $parameters['customerReference'] = $customerReference;
+            $options['customerReference'] = $customerReference;
         }
 
-        return $this->createRequest(AuthorizeRequest::class, $parameters);
+        return $this->createRequest(PurchaseRequest::class, $options);
     }
 
-    public function capture(array $parameters = []): AbstractRequest
-    {
-        return $this->createRequest(CaptureRequest::class, $parameters);
-    }
-
-    public function refund(array $parameters = []): AbstractRequest
-    {
-        return $this->createRequest(RefundRequest::class, $parameters);
-    }
-
-    public function retryRefund(array $parameters = []): AbstractRequest
+    public function authorize(array $options = []): AbstractRequest
     {
         $customerReference = $this->resolveCustomerReference(
-            $parameters['gateway'] ?? null,
-            $parameters['instrument'] ?? null,
-            $parameters['billingAddress'] ?? null,
+            $options['gateway'] ?? null,
+            $options['instrument'] ?? null,
+            $options['billingAddress'] ?? null,
         );
         if ($customerReference !== null) {
-            $parameters['customerReference'] = $customerReference;
+            $options['customerReference'] = $customerReference;
         }
 
-        return $this->createRequest(PayoutRequest::class, $parameters);
+        return $this->createRequest(AuthorizeRequest::class, $options);
     }
 
-    public function void(array $parameters = []): AbstractRequest
+    public function capture(array $options = []): AbstractRequest
     {
-        return $this->createRequest(VoidRequest::class, $parameters);
+        return $this->createRequest(CaptureRequest::class, $options);
     }
 
-    public function issueVirtualCard(array $parameters = []): AbstractRequest
+    public function refund(array $options = []): AbstractRequest
+    {
+        return $this->createRequest(RefundRequest::class, $options);
+    }
+
+    #[Override]
+    public function retryRefund(array $options = []): AbstractRequest
+    {
+        $customerReference = $this->resolveCustomerReference(
+            $options['gateway'] ?? null,
+            $options['instrument'] ?? null,
+            $options['billingAddress'] ?? null,
+        );
+        if ($customerReference !== null) {
+            $options['customerReference'] = $customerReference;
+        }
+
+        return $this->createRequest(PayoutRequest::class, $options);
+    }
+
+    #[Override]
+    public function void(array $options = []): AbstractRequest
+    {
+        return $this->createRequest(VoidRequest::class, $options);
+    }
+
+    #[Override]
+    public function issueVirtualCard(array $options = []): AbstractRequest
     {
         throw new RuntimeException('Nuvei does not support virtual card issuance.');
     }
 
-    public function updateVirtualCard(array $parameters = []): AbstractRequest
+    #[Override]
+    public function updateVirtualCard(array $options = []): AbstractRequest
     {
         throw new RuntimeException('Nuvei does not support virtual card update.');
     }
 
-    public function terminateVirtualCard(array $parameters = []): AbstractRequest
+    #[Override]
+    public function terminateVirtualCard(array $options = []): AbstractRequest
     {
         throw new RuntimeException('Nuvei does not support virtual card termination.');
     }
 
-    protected function createRequest($class, array $parameters): AbstractRequest
+    #[Override]
+    protected function createRequest($class, array $options): AbstractRequest
     {
         $extra = [
             'restClient' => $this->restClient,
@@ -246,7 +258,7 @@ final class NuveiGateway extends AbstractGateway implements Gateway
             $extra['sessionToken'] = $sessionToken;
         }
 
-        return parent::createRequest($class, $parameters + $extra);
+        return parent::createRequest($class, $options + $extra);
     }
 
     /**
