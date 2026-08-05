@@ -18,6 +18,7 @@ use RuntimeException;
 use Techork\PaymentService\Common\Contract\PaymentInstrument;
 use Techork\PaymentService\Common\ValueObject\BillingAddress;
 use Techork\PaymentService\Gateway\Contract\CustomerRepository;
+use Techork\PaymentService\Gateway\Exception\UnsupportedOperation;
 use Techork\PaymentService\Gateway\Contract\Gateway;
 use Techork\PaymentService\Gateway\Contract\GatewayCredential;
 
@@ -227,19 +228,31 @@ final class NuveiGateway extends AbstractGateway implements Gateway
     #[Override]
     public function issueVirtualCard(array $options = []): AbstractRequest
     {
-        throw new RuntimeException('Nuvei does not support virtual card issuance.');
+        throw UnsupportedOperation::forGateway(
+            'nuvei',
+            'issueVirtualCard',
+            'Nuvei acquires payments and issues no cards; route card issuing to an issuing gateway.',
+        );
     }
 
     #[Override]
     public function updateVirtualCard(array $options = []): AbstractRequest
     {
-        throw new RuntimeException('Nuvei does not support virtual card update.');
+        throw UnsupportedOperation::forGateway(
+            'nuvei',
+            'updateVirtualCard',
+            'Nuvei acquires payments and issues no cards; route card issuing to an issuing gateway.',
+        );
     }
 
     #[Override]
     public function terminateVirtualCard(array $options = []): AbstractRequest
     {
-        throw new RuntimeException('Nuvei does not support virtual card termination.');
+        throw UnsupportedOperation::forGateway(
+            'nuvei',
+            'terminateVirtualCard',
+            'Nuvei acquires payments and issues no cards; route card issuing to an issuing gateway.',
+        );
     }
 
     #[Override]
@@ -289,16 +302,9 @@ final class NuveiGateway extends AbstractGateway implements Gateway
             return null;
         }
 
-        $response = $this->createCustomer([
-            'email' => (string) $billingAddress->email,
-            'firstName' => $billingAddress->firstName,
-            'lastName' => $billingAddress->lastName,
-            'country' => (string) $billingAddress->country,
-            'address' => $billingAddress->line,
-            'city' => $billingAddress->city,
-            'postal_code' => $billingAddress->postalCode,
-            'state' => $billingAddress->state ? (string) $billingAddress->state : null,
-        ])->send();
+        // One key, the way Stripe already did it. Spreading the address over seven required a
+        // setter for each, and six were missing — so the request received none of them.
+        $response = $this->createCustomer(['billingAddress' => $billingAddress])->send();
 
         if (! $response->isSuccessful()) {
             throw new RuntimeException("Nuvei createCustomer failed: {$response->getMessage()}");

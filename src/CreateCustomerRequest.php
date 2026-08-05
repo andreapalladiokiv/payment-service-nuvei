@@ -23,17 +23,29 @@ final class CreateCustomerRequest extends AbstractRequest
     #[Override]
     public function getData(): array
     {
+        // Read off the billing address rather than seven discrete keys. None of those keys had
+        // a setter, so omnipay dropped every one of them and the defaults below were what
+        // actually went to Nuvei: every customer registered as "N/A N/A" in the US, whatever
+        // their real name and country.
+        //
+        // The defaults stay, because Nuvei marks firstName and lastName required and a
+        // placeholder is the honest answer when a name is genuinely unknown. They are now the
+        // last resort they were meant to be rather than the normal case.
+        $address = $this->getBillingAddress();
+        $email = $this->getEmail() !== '' ? $this->getEmail() : (string) ($address?->email ?? '');
+        $state = $address?->state;
+
         return array_filter([
-            'userTokenId' => $this->getEmail(),
+            'userTokenId' => $email,
             'clientRequestId' => uniqid('cust_', true),
-            'email' => $this->getEmail(),
-            'firstName' => $this->getParameter('firstName') ?: 'N/A',
-            'lastName' => $this->getParameter('lastName') ?: 'N/A',
-            'countryCode' => $this->getParameter('country') ?? 'US',
-            'address' => $this->getParameter('address'),
-            'city' => $this->getParameter('city'),
-            'zip' => $this->getParameter('postal_code'),
-            'state' => $this->getParameter('state'),
+            'email' => $email,
+            'firstName' => $address?->firstName ?: 'N/A',
+            'lastName' => $address?->lastName ?: 'N/A',
+            'countryCode' => $address !== null ? (string) $address->country : 'US',
+            'address' => $address?->line,
+            'city' => $address?->city,
+            'zip' => $address?->postalCode,
+            'state' => $state === null ? null : (string) $state,
         ]);
     }
 

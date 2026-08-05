@@ -47,6 +47,13 @@ trait NuveiRequestParameters
         return $this->setParameter('billingAddress', $v);
     }
 
+    public function getBillingAddress(): ?BillingAddress
+    {
+        $address = $this->getParameter('billingAddress');
+
+        return $address instanceof BillingAddress ? $address : null;
+    }
+
     public function setEnvironment(string $v): self
     {
         return $this->setParameter('environment', $v);
