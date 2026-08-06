@@ -97,9 +97,11 @@ class NuveiTransactionResponse extends AbstractResponse implements CardChecksPro
         $url = $threeD['acsUrl'] ?? $threeD['methodUrl'] ?? $redirectUrl;
         $payload = $threeD['cReq'] ?? $threeD['creq'] ?? $threeD['methodPayload'] ?? null;
 
-        $authenticationId = $threeD['threeDSServerTransId']
-            ?? $threeD['threeDSServerTransID']
-            ?? self::threeDSServerTransactionId($threeD['methodPayload'] ?? null);
+        // Nuvei's own transaction id, not a `threeDSServerTransID`. Digging the protocol's
+        // identifier out of the base64 method payload was tried and reverted: it exists only on
+        // the fingerprint step, so it would name a different thing at each step, and it is not
+        // what resumes anything here.
+        $authenticationId = $this->getTransactionReference();
 
         if ($url === null || $authenticationId === null) {
             return null;
@@ -114,34 +116,11 @@ class NuveiTransactionResponse extends AbstractResponse implements CardChecksPro
         }
 
         return new ThreeDSChallenge(
-            authenticationId: (string) $authenticationId,
+            authenticationId: $authenticationId,
             url: (string) $url,
             payload: $payload === null ? null : (string) $payload,
             protocolVersion: ThreeDSVersion::tryFrom((string) ($threeD['version'] ?? '')) ?? ThreeDSVersion::V220,
         );
-    }
-
-    /**
-     * Dig the `threeDSServerTransID` out of a base64 3DS Method payload — the identity the whole
-     * authentication is keyed on, which the standard carries inside that payload rather than as a
-     * field of its own. Null for a challenge-step payload, which is a CReq and holds no such thing.
-     */
-    private static function threeDSServerTransactionId(mixed $payload): ?string
-    {
-        if (! is_string($payload) || $payload === '') {
-            return null;
-        }
-
-        $decoded = base64_decode($payload, true);
-
-        if ($decoded === false) {
-            return null;
-        }
-
-        $fields = json_decode($decoded, true);
-        $id = is_array($fields) ? ($fields['threeDSServerTransID'] ?? null) : null;
-
-        return is_string($id) && $id !== '' ? $id : null;
     }
 
     #[Override]
