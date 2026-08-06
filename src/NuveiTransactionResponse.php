@@ -12,6 +12,7 @@ use Omnipay\Common\Message\AbstractResponse;
 use Override;
 use Techork\PaymentService\Common\Contract\Challenge;
 use Techork\PaymentService\Common\ValueObject\Challenge\ThreeDSChallenge;
+use Techork\PaymentService\Common\ValueObject\ThreeDS\ThreeDSVersion;
 use Techork\PaymentService\Common\ValueObject\CreditCard\CheckResult;
 use Techork\PaymentService\Gateway\Contract\CardChecksProvider;
 use Techork\PaymentService\Gateway\Contract\ChallengeProvider;
@@ -89,25 +90,58 @@ class NuveiTransactionResponse extends AbstractResponse implements CardChecksPro
         $threeD = is_array($threeD) ? $threeD : [];
 
         $redirectUrl = $this->data['paymentOption']['redirectUrl'] ?? null;
-        $acsUrl = $threeD['acsUrl'] ?? $redirectUrl;
-        $reference = $this->getTransactionReference();
 
-        if ($acsUrl === null || $reference === null) {
+        // `methodUrl` comes first in Nuvei's own flow and was not read here at all, so the device
+        // fingerprinting step never reached a client — which costs frictionless approvals, since
+        // that step is what the issuer's risk decision is made on.
+        $url = $threeD['acsUrl'] ?? $threeD['methodUrl'] ?? $redirectUrl;
+        $payload = $threeD['cReq'] ?? $threeD['creq'] ?? $threeD['methodPayload'] ?? null;
+
+        $authenticationId = $threeD['threeDSServerTransId']
+            ?? $threeD['threeDSServerTransID']
+            ?? self::threeDSServerTransactionId($threeD['methodPayload'] ?? null);
+
+        if ($url === null || $authenticationId === null) {
             return null;
         }
 
         $isChallenge = ($this->data['transactionStatus'] ?? '') === 'REDIRECT'
-            || ($threeD['result'] ?? null) === 'C';
+            || ($threeD['result'] ?? null) === 'C'
+            || isset($threeD['methodUrl']);
 
         if (! $isChallenge) {
             return null;
         }
 
         return new ThreeDSChallenge(
-            transactionId: $reference,
-            acsUrl: $acsUrl,
-            creq: $threeD['cReq'] ?? $threeD['creq'] ?? null,
+            authenticationId: (string) $authenticationId,
+            url: (string) $url,
+            payload: $payload === null ? null : (string) $payload,
+            protocolVersion: ThreeDSVersion::tryFrom((string) ($threeD['version'] ?? '')) ?? ThreeDSVersion::V220,
         );
+    }
+
+    /**
+     * Dig the `threeDSServerTransID` out of a base64 3DS Method payload — the identity the whole
+     * authentication is keyed on, which the standard carries inside that payload rather than as a
+     * field of its own. Null for a challenge-step payload, which is a CReq and holds no such thing.
+     */
+    private static function threeDSServerTransactionId(mixed $payload): ?string
+    {
+        if (! is_string($payload) || $payload === '') {
+            return null;
+        }
+
+        $decoded = base64_decode($payload, true);
+
+        if ($decoded === false) {
+            return null;
+        }
+
+        $fields = json_decode($decoded, true);
+        $id = is_array($fields) ? ($fields['threeDSServerTransID'] ?? null) : null;
+
+        return is_string($id) && $id !== '' ? $id : null;
     }
 
     #[Override]
