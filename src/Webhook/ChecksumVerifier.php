@@ -6,8 +6,8 @@ namespace Techork\PaymentService\Nuvei\Webhook;
 
 use Override;
 use Techork\PaymentService\Gateway\Webhook\Contract\SignatureVerifier;
-use Psr\Http\Message\ServerRequestInterface;
 use Techork\PaymentService\Gateway\Contract\GatewayCredential;
+use Techork\PaymentService\Gateway\Webhook\Contract\InboundWebhook;
 
 /**
  * Nuvei checksum verification. Pure protocol: the caller passes a single
@@ -29,13 +29,9 @@ use Techork\PaymentService\Gateway\Contract\GatewayCredential;
 final readonly class ChecksumVerifier implements SignatureVerifier
 {
     #[Override]
-    public function verify(ServerRequestInterface $request, GatewayCredential $gateway): bool
+    public function verify(InboundWebhook $webhook, GatewayCredential $gateway): bool
     {
-        $payload = $request->getParsedBody();
-        if (! is_array($payload) || $payload === []) {
-            $payload = [];
-            parse_str((string) $request->getBody(), $payload);
-        }
+        $payload = $webhook->fields();
 
         // Nuvei sends the merchant pair under two different shapes depending
         // on the delivery channel: camelCase in JSON Notifications and
@@ -58,7 +54,7 @@ final readonly class ChecksumVerifier implements SignatureVerifier
         }
 
         if (isset($payload['EventCorrelationId'])) {
-            return $this->verifyNotification($request, $secret);
+            return $this->verifyNotification($webhook, $secret);
         }
 
         return $this->verifyDmn($payload, $secret);
@@ -84,14 +80,14 @@ final readonly class ChecksumVerifier implements SignatureVerifier
         return hash_equals($expected, $received);
     }
 
-    private function verifyNotification(ServerRequestInterface $request, string $secret): bool
+    private function verifyNotification(InboundWebhook $webhook, string $secret): bool
     {
-        $received = strtolower($request->getHeaderLine('checksum'));
+        $received = strtolower($webhook->header('checksum'));
         if ($received === '') {
             return false;
         }
 
-        $body = (string) $request->getBody();
+        $body = $webhook->body;
         $expected = hash('sha256', $secret.$body);
 
         return hash_equals($expected, $received);

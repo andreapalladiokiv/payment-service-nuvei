@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+use Techork\PaymentService\Gateway\Webhook\Contract\InboundWebhook;
+
 use Nyholm\Psr7\Factory\Psr17Factory;
 use Psr\Http\Message\ServerRequestInterface;
 use Techork\PaymentService\Gateway\Contract\GatewayCredential;
@@ -39,9 +41,11 @@ function checksumCredential(string $merchantId, string $siteId, string $secret):
     };
 }
 
-function dmnRequest(array $payload): ServerRequestInterface
+function dmnRequest(array $payload): InboundWebhook
 {
-    return (new Psr17Factory)->createServerRequest('POST', '/webhooks')->withParsedBody($payload);
+    return InboundWebhook::from(
+        (new Psr17Factory)->createServerRequest('POST', '/webhooks')->withParsedBody($payload),
+    );
 }
 
 it('accepts a DMN with a valid advanceResponseChecksum', function () {
@@ -94,10 +98,12 @@ it('accepts a Notification with a valid body-based checksum header', function ()
     $body = '{"EventCorrelationId":"ec_1","merchantId":"1","merchantSiteId":"2"}';
     $expected = hash('sha256', $secret.$body);
 
-    $request = (new Psr17Factory)->createServerRequest('POST', '/webhooks')
-        ->withHeader('checksum', $expected)
-        ->withParsedBody(json_decode($body, true))
-        ->withBody((new Psr17Factory)->createStream($body));
+    $request = InboundWebhook::from(
+        (new Psr17Factory)->createServerRequest('POST', '/webhooks')
+            ->withHeader('checksum', $expected)
+            ->withParsedBody(json_decode($body, true))
+            ->withBody((new Psr17Factory)->createStream($body)),
+    );
 
     expect((new ChecksumVerifier)->verify($request, checksumCredential('1', '2', $secret)))->toBeTrue();
 });
