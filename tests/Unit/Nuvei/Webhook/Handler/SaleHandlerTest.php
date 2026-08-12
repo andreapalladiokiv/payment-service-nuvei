@@ -19,6 +19,7 @@ function saleEvent(string $status, string $piId, array $extra = []): NuveiEvent
         'Status' => $status,
         'clientUniqueId' => $piId,
         'PPP_TransactionID' => 'ppp_'.bin2hex(random_bytes(4)),
+        'TransactionID' => '111000000'.random_int(1000000000, 9999999999),
         'totalAmount' => '10.50',
         'currency' => 'USD',
     ], $extra));
@@ -28,6 +29,7 @@ it('records gateway success on APPROVED Sale DMN', function () {
     $piId = Uuid::uuid4()->toString();
     $event = saleEvent('APPROVED', $piId, [
         'PPP_TransactionID' => 'ppp_abcdef',
+        'TransactionID' => '1110000000123456',
     ]);
 
     $successRec = Mockery::mock(GatewaySuccessRecorder::class);
@@ -35,7 +37,10 @@ it('records gateway success on APPROVED Sale DMN', function () {
         ->once()
         ->withArgs(function ($gatewayId, $piIdArg, $reference, Money $amount) use ($piId) {
             return $piIdArg === $piId
-                && $reference === 'ppp_abcdef'
+                // `TransactionID`, not the PPP id: a Credit DMN refunding this
+                // hosted sale carries `relatedTransactionId` in this family, so a PI
+                // stored under the PPP id could never be found from its own refund.
+                && $reference === '1110000000123456'
                 // '10.50' is $10.50: DMN amounts are major units, so the
                 // recorded Money must be 1050 minor units, not 10.
                 && $amount->getAmount() === '1050'

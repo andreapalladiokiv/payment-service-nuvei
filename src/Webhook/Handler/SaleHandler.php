@@ -22,8 +22,13 @@ use Techork\PaymentService\Gateway\Webhook\Recorder\RecorderOutcome;
  * to `Charged`.
  *
  * `clientUniqueId` was set to the PaymentIntent UUID when we built the
- * Cashier form, so we recover it here and use the `PPP_TransactionID` as
- * the gateway reference saved against the PI.
+ * Cashier form, so we recover it here and use `TransactionID` as the gateway
+ * reference saved against the PI.
+ *
+ * `TransactionID` rather than `PPP_TransactionID` even though a hosted sale has
+ * no API response to agree with: a later Credit DMN refunding this sale carries
+ * `relatedTransactionId` in the `TransactionID` family, so a PI stored under the
+ * PPP id could never be resolved from its own refund.
  *
  * @implements WebhookEventHandler<NuveiEvent>
  */
@@ -49,12 +54,17 @@ final readonly class SaleHandler implements WebhookEventHandler
             return $this->map($this->failureRecorder->onGatewayFailure($paymentIntentId, $reason));
         }
 
+        $reference = $event->transactionId();
+        if ($reference === '') {
+            return HandlerOutcome::Skipped;
+        }
+
         $amount = $event->totalMoney();
 
         return $this->map($this->successRecorder->onGatewaySuccess(
             $gatewayId,
             $paymentIntentId,
-            $event->pppTransactionId(),
+            $reference,
             $amount,
         ));
     }

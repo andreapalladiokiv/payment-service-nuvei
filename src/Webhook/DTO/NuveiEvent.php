@@ -52,9 +52,38 @@ final readonly class NuveiEvent
         return (string) ($this->payload['clientUniqueId'] ?? '');
     }
 
+    /**
+     * The DMN's `PPP_TransactionID`. This is **not** the id the REST API returns
+     * as `transactionId`, and the two are not interchangeable — Nuvei numbers them
+     * separately (our own wiring fixture shows `778899` against `1110000000123456`).
+     *
+     * Use it to identify the delivery, never to key a transaction we also reach
+     * through the API: {@see transactionId} is the one that matches what an API
+     * response gave us, and mixing the families writes references nothing can
+     * later resolve.
+     */
     public function pppTransactionId(): string
     {
         return (string) ($this->payload['PPP_TransactionID'] ?? '');
+    }
+
+    /**
+     * The gateway-side transaction reference, DMN field `TransactionID`.
+     *
+     * This is the same value `NuveiTransactionResponse::getTransactionReference()`
+     * reads off a synchronous API response, so a transaction we initiated ourselves
+     * is already stored under it. `relatedTransactionId` is in this family too,
+     * which is the reason a Credit DMN resolves its payment intent while a refund
+     * keyed on `PPP_TransactionID` never matches the row the refund call wrote.
+     *
+     * There is deliberately no fallback to `PPP_TransactionID` when this is absent.
+     * Falling back is what let two id families share one slot; a handler that
+     * cannot name the transaction should refuse rather than record it under an id
+     * nothing else uses.
+     */
+    public function transactionId(): string
+    {
+        return (string) ($this->payload['TransactionID'] ?? '');
     }
 
     public function relatedTransactionId(): string

@@ -47,9 +47,14 @@ final readonly class SettleHandler implements WebhookEventHandler
             return HandlerOutcome::Skipped;
         }
 
+        $reference = $event->transactionId();
+        if ($reference === '') {
+            return HandlerOutcome::Skipped;
+        }
+
         $amount = $event->totalMoney();
 
-        $outcome = $this->recorder->onGatewaySuccess($gatewayId, $paymentIntentId, $event->pppTransactionId(), $amount);
+        $outcome = $this->recorder->onGatewaySuccess($gatewayId, $paymentIntentId, $reference, $amount);
         $handlerOutcome = match ($outcome) {
             RecorderOutcome::Applied => HandlerOutcome::Processed,
             RecorderOutcome::Skipped => HandlerOutcome::Skipped,

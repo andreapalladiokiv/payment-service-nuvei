@@ -20,6 +20,7 @@ it('delegates Settle APPROVED to GatewaySuccessRecorder', function () {
         'Status' => 'APPROVED',
         'clientUniqueId' => $piId,
         'PPP_TransactionID' => 'ppp_123',
+        'TransactionID' => '1110000000000123',
         'totalAmount' => '100',
         'currency' => 'USD',
     ]);
@@ -27,7 +28,7 @@ it('delegates Settle APPROVED to GatewaySuccessRecorder', function () {
     $recorder = Mockery::mock(GatewaySuccessRecorder::class);
     $recorder->shouldReceive('onGatewaySuccess')
         ->once()
-        ->with($gatewayId, $piId, 'ppp_123', Mockery::on(fn (Money $m) => $m->getAmount() === '10000' && $m->getCurrency()->getCode() === 'USD'))
+        ->with($gatewayId, $piId, '1110000000000123', Mockery::on(fn (Money $m) => $m->getAmount() === '10000' && $m->getCurrency()->getCode() === 'USD'))
         ->andReturn(RecorderOutcome::Applied);
 
     $feeRecorder = Mockery::mock(GatewayFeeRecorder::class);
@@ -60,6 +61,7 @@ it('strips :capture suffix from clientUniqueId before resolving (idempotency-key
         'Status' => 'APPROVED',
         'clientUniqueId' => $piId.':capture',
         'PPP_TransactionID' => 'ppp_456',
+        'TransactionID' => '1110000000000456',
         'totalAmount' => '500',
         'currency' => 'USD',
     ]);
@@ -67,7 +69,7 @@ it('strips :capture suffix from clientUniqueId before resolving (idempotency-key
     $recorder = Mockery::mock(GatewaySuccessRecorder::class);
     $recorder->shouldReceive('onGatewaySuccess')
         ->once()
-        ->with($gatewayId, $piId, 'ppp_456', Mockery::any())
+        ->with($gatewayId, $piId, '1110000000000456', Mockery::any())
         ->andReturn(RecorderOutcome::Applied);
 
     $feeRecorder = Mockery::mock(GatewayFeeRecorder::class);
@@ -84,6 +86,7 @@ it('forwards feeAmount to FeeRecorder when present and recorder Applied', functi
         'Status' => 'APPROVED',
         'clientUniqueId' => $piId,
         'PPP_TransactionID' => 'ppp_fee',
+        'TransactionID' => '1110000000000789',
         'totalAmount' => '1000',
         'feeAmount' => '35',
         'currency' => 'USD',
@@ -114,6 +117,7 @@ it('does not forward fee when feeAmount is absent or zero', function () {
         'Status' => 'APPROVED',
         'clientUniqueId' => $piId,
         'PPP_TransactionID' => 'ppp_no_fee',
+        'TransactionID' => '1110000000000790',
         'totalAmount' => '1000',
         'currency' => 'USD',
     ]);
@@ -135,6 +139,7 @@ it('does not forward fee when recorder did not Apply (e.g. NotFound)', function 
         'Status' => 'APPROVED',
         'clientUniqueId' => $piId,
         'PPP_TransactionID' => 'ppp_notfound',
+        'TransactionID' => '1110000000000791',
         'totalAmount' => '1000',
         'feeAmount' => '35',
         'currency' => 'USD',

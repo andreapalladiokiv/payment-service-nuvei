@@ -23,7 +23,10 @@ use Techork\PaymentService\Gateway\Webhook\Recorder\RefundProcessingRecorder;
  * booked for this credit to {@see GatewayFeeRecorder::onRefundFee} for admin
  * display. We resolve our internal refund id via
  * {@see TransactionIdResolver::resolveRefund} — the gateway-side refund
- * reference is `PPP_TransactionID`.
+ * reference is `TransactionID`, which is what the refund API call returned and
+ * stored. It used to be `PPP_TransactionID`, a different id Nuvei numbers
+ * separately, so the lookup could never hit the row the refund had written and
+ * the credit was booked as a refund we had never heard of.
  *
  * @implements WebhookEventHandler<NuveiEvent>
  */
@@ -40,7 +43,7 @@ final readonly class CreditHandler implements WebhookEventHandler
     public function __invoke(object $event, GatewayId $gatewayId): HandlerOutcome
     {
         /** @var NuveiEvent $event */
-        $refundReference = $event->pppTransactionId();
+        $refundReference = $event->transactionId();
         if ($refundReference === '') {
             return HandlerOutcome::Skipped;
         }

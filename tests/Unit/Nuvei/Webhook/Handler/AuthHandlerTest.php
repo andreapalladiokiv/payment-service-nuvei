@@ -20,6 +20,7 @@ function authEvent(string $status, string $piId, array $extra = []): NuveiEvent
         'Status' => $status,
         'clientUniqueId' => $piId,
         'PPP_TransactionID' => 'ppp_'.bin2hex(random_bytes(4)),
+        'TransactionID' => '1110000000123456',
         'totalAmount' => '100',
     ], $extra));
 }
@@ -42,7 +43,14 @@ it('records authorization on APPROVED and attempts a best-effort PM upsert', fun
     ]);
 
     $authRec = Mockery::mock(GatewayAuthorizationRecorder::class);
-    $authRec->shouldReceive('onGatewayAuthorization')->once()->andReturn(RecorderOutcome::Applied);
+    // Pin the reference: this assertion was `->once()` with no argument check, so the
+    // authorization could be stored under either Nuvei id and the suite stayed green.
+    // A later Void or Credit DMN points back at this payment through
+    // `relatedTransactionId`, which is in the `TransactionID` family.
+    $authRec->shouldReceive('onGatewayAuthorization')
+        ->once()
+        ->with($gatewayId, $piId->toString(), '1110000000123456')
+        ->andReturn(RecorderOutcome::Applied);
     $failRec = Mockery::mock(GatewayFailureRecorder::class);
     $pmRec = Mockery::mock(GatewayPaymentMethodRecorder::class);
     $pmRec->shouldReceive('onPaymentMethodRecord')->once()->andReturn(RecorderOutcome::Applied);

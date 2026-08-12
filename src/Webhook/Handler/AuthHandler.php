@@ -46,10 +46,18 @@ final readonly class AuthHandler implements WebhookEventHandler
         }
 
         if ($event->status() === 'APPROVED') {
+            // `TransactionID`, the family the synchronous authorize response already
+            // stored and the one a later Void or Credit DMN points back at through
+            // `relatedTransactionId`. See {@see NuveiEvent::transactionId()}.
+            $reference = $event->transactionId();
+            if ($reference === '') {
+                return HandlerOutcome::Skipped;
+            }
+
             $outcome = $this->authorizationRecorder->onGatewayAuthorization(
                 $gatewayId,
                 $paymentIntentId,
-                $event->pppTransactionId(),
+                $reference,
             );
 
             if ($outcome === RecorderOutcome::Applied) {
