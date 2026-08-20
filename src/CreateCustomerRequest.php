@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Techork\PaymentService\Nuvei;
 
+use Techork\PaymentService\Common\ValueObject\CustomerIdentity;
 use Override;
 use Techork\PaymentService\Nuvei\Concern\NuveiRequestParameters;
 use Nuvei\Api\RestClient;
@@ -32,15 +33,25 @@ final class CreateCustomerRequest extends AbstractRequest
         // placeholder is the honest answer when a name is genuinely unknown. They are now the
         // last resort they were meant to be rather than the normal case.
         $address = $this->getBillingAddress();
-        $email = $this->getEmail() !== '' ? $this->getEmail() : (string) ($address?->email ?? '');
+        $identity = $this->getCustomerIdentity();
+        $email = (string) ($identity?->email
+            ?? ($this->getEmail() !== '' ? $this->getEmail() : $address?->email));
         $state = $address?->state;
 
+        // The token is our customer id when we have one. It used to be the email, which Nuvei
+        // documents as the field that "uniquely identifies your consumer/user in your system" —
+        // so a change of address made a different customer of the same person and orphaned their
+        // saved cards. See {@see \Techork\PaymentService\Nuvei\NuveiGateway} for the migration
+        // this cannot ship without.
         return array_filter([
-            'userTokenId' => $email,
+            'userTokenId' => $this->getUserTokenId() !== '' ? $this->getUserTokenId() : $email,
             'clientRequestId' => uniqid('cust_', true),
             'email' => $email,
-            'firstName' => $address?->firstName ?: 'N/A',
-            'lastName' => $address?->lastName ?: 'N/A',
+            // The identity first: Nuvei marks these required, and reading them off whatever
+            // address rode along with a payment is how customers came to be registered as
+            // "N/A N/A". The placeholders stay as the last resort they were meant to be.
+            'firstName' => $identity?->firstName ?: ($address?->firstName ?: 'N/A'),
+            'lastName' => $identity?->lastName ?: ($address?->lastName ?: 'N/A'),
             'countryCode' => $address !== null ? (string) $address->country : 'US',
             'address' => $address?->line,
             'city' => $address?->city,
@@ -74,6 +85,30 @@ final class CreateCustomerRequest extends AbstractRequest
                 'error' => $e->getMessage(),
             ]);
         }
+    }
+
+    public function setCustomerIdentity(?CustomerIdentity $value): self
+    {
+        return $this->setParameter('customerIdentity', $value);
+    }
+
+    public function getCustomerIdentity(): ?CustomerIdentity
+    {
+        $identity = $this->getParameter('customerIdentity');
+
+        return $identity instanceof CustomerIdentity ? $identity : null;
+    }
+
+    public function setUserTokenId(?string $value): self
+    {
+        return $this->setParameter('userTokenId', $value);
+    }
+
+    public function getUserTokenId(): string
+    {
+        $token = $this->getParameter('userTokenId');
+
+        return is_string($token) ? $token : '';
     }
 
     public function getEmail(): string

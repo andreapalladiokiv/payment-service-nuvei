@@ -123,7 +123,7 @@ abstract class NuveiPaymentRequest extends AbstractRequest implements PaymentIns
         // Omit, don't send '': Nuvei rejects an empty userTokenId outright,
         // while a payment without one is valid for non-stored instruments.
         // Stored userPaymentOptionIds still require the owning user — the
-        // gateway resolves it via CustomerRepository before building this
+        // gateway resolves it via GatewayCustomerRepository before building this
         // request.
         $userTokenId = $this->getCustomerReference();
         if ($userTokenId !== '') {
