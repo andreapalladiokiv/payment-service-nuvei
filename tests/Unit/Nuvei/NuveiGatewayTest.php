@@ -15,6 +15,9 @@ use Techork\PaymentService\Common\ValueObject\CreditCard\Holder;
 use Techork\PaymentService\Common\ValueObject\CreditCard\Number;
 use Techork\PaymentService\Common\ValueObject\PaymentMethod;
 use Techork\PaymentService\Common\ValueObject\PaymentMethodId;
+use Techork\PaymentService\Common\ValueObject\CustomerIdentity;
+use Techork\PaymentService\Common\ValueObject\Email;
+use Techork\PaymentService\Gateway\Exception\RegistrationNeedsCustomer;
 use Techork\PaymentService\Gateway\Contract\GatewayCustomerRepository;
 use Techork\PaymentService\Gateway\Contract\GatewayCredential;
 use Techork\PaymentService\Gateway\Exception\UnsupportedByGateway;
@@ -388,6 +391,32 @@ it('resolves no customer for operations that act on an existing transaction', fu
 })->with(['capture', 'refund', 'void', 'createCard']);
 
 /**
+ * A payment looks the customer up and stops there, the same as at Stripe and for a sharper reason:
+ * a `userPaymentOptionId` exists only under the `userTokenId` it was stored against, and the docs
+ * do not promise it survives a change of token. So a user created mid-payment cannot own the
+ * stored option being charged — the charge simply will not find it — and what is left behind is a
+ * Nuvei user nobody asked for.
+ *
+ * Registration is the operation allowed to create one, because attaching is what it does.
+ */
+it('does not bring a Nuvei user into existence while taking a payment', function (string $method) {
+    $gatewayCustomers = Mockery::mock(GatewayCustomerRepository::class);
+    $gatewayCustomers->shouldReceive('find')->once()->andReturnNull();
+    $gatewayCustomers->shouldNotReceive('saveReference');
+
+    $gateway = nuveiFacadeGateway();
+    $gateway->setGatewayCustomerRepository($gatewayCustomers);
+
+    $request = $gateway->{$method}([
+        'gateway' => nuveiFacadeCredential(),
+        'instrument' => nuveiFacadeInstrument(),
+        'customerId' => '0199f0a2-1c3a-7b8d-9e4f-aabbccddeeff',
+    ]);
+
+    expect($request->getParameters())->not->toHaveKey('customerReference');
+})->with(['authorize', 'purchase']);
+
+/**
  * Told no customer, there is no token — and deliberately no fallback to finding one by
  * instrument. That path is what registered customers under whatever address rode along with a
  * payment, and leaving it as a silent fallback would have made this change optional.
@@ -404,4 +433,46 @@ it('resolves no customer when the caller named none', function () {
     expect($request->getParameters())->not->toHaveKey('customerReference');
 });
 
+/**
+ * The assertion that was missing, and the mirror of the mistake F6 records.
+ *
+ * `PaymentGatewayRouterTest` proves the router *sends* `customerId`; it cannot prove the adapter
+ * reads it. Omnipay applies a key only where a matching setter exists
+ * (`Helper::initialize()`), so a key the request has no setter for is dropped in silence — and
+ * `CreateCustomerRequest` then falls back to the email as `userTokenId`, which is exactly the
+ * state F5 removed and A3 exists to migrate away from. Worse, the response reports
+ * `reference = userTokenId`, so the caller would store (our id → email) and every later lookup
+ * would succeed while pointing at the wrong key.
+ *
+ * So this builds the real request with the option shape the router sends, and looks at what
+ * would go to Nuvei.
+ */
+it('sends our customer id as the userTokenId, whatever the caller calls the key', function (array $options) {
+    $request = nuveiFacadeGateway()->createCustomer([
+        'gateway' => nuveiFacadeCredential(),
+        'customerIdentity' => new CustomerIdentity('Ada', 'Lovelace', new Email('ada@example.test')),
+        ...$options,
+    ]);
 
+    expect($request->getData()['userTokenId'])->toBe('0199f0a2-1c3a-7b8d-9e4f-aabbccddeeff');
+})->with([
+    'as the router names it' => [['customerId' => '0199f0a2-1c3a-7b8d-9e4f-aabbccddeeff']],
+    'as Nuvei names it' => [['userTokenId' => '0199f0a2-1c3a-7b8d-9e4f-aabbccddeeff']],
+]);
+
+/**
+ * And with no customer named it refuses rather than reaching for the email.
+ *
+ * The fallback used to be the last resort for a caller that supplied no token. There is no such
+ * caller now — `registerCustomer()` always names one — so the only thing the fallback can still do
+ * is quietly recreate an email-keyed user. Nuvei's own answer to a missing token is
+ * "size must be between 1 and 255", which says nothing about what went wrong.
+ */
+it('refuses to register a Nuvei user with no customer of ours named', function () {
+    $request = nuveiFacadeGateway()->createCustomer([
+        'gateway' => nuveiFacadeCredential(),
+        'customerIdentity' => new CustomerIdentity('Ada', 'Lovelace', new Email('ada@example.test')),
+    ]);
+
+    expect(fn () => $request->getData())->toThrow(RegistrationNeedsCustomer::class);
+});

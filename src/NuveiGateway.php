@@ -14,24 +14,21 @@ use Nuvei\Api\Service\Payments\CreditCard as NuveiCreditCardService;
 use Omnipay\Common\AbstractGateway;
 use Omnipay\Common\Message\AbstractRequest;
 use Override;
-use RuntimeException;
 use Techork\PaymentService\Common\Contract\PaymentInstrument;
 use Techork\PaymentService\Common\ValueObject\BillingAddress;
-use Techork\PaymentService\Gateway\Contract\CustomerIdentitySource;
 use Techork\PaymentService\Gateway\Contract\GatewayCustomerRepository;
+use Techork\PaymentService\Gateway\Contract\RegistersCustomers;
 use Techork\PaymentService\Gateway\Contract\ResolvesGatewayCustomers;
 use Techork\PaymentService\Gateway\ValueObject\GatewayId;
 use Techork\PaymentService\Gateway\Exception\UnsupportedOperation;
 use Techork\PaymentService\Gateway\Contract\Gateway;
 use Techork\PaymentService\Gateway\Contract\GatewayCredential;
 
-final class NuveiGateway extends AbstractGateway implements Gateway, ResolvesGatewayCustomers
+final class NuveiGateway extends AbstractGateway implements Gateway, RegistersCustomers, ResolvesGatewayCustomers
 {
     private RestClient $restClient;
 
     private ?GatewayCustomerRepository $gatewayCustomerRepository = null;
-
-    private ?CustomerIdentitySource $customerIdentitySource = null;
 
     #[Override]
     public function getName(): string
@@ -43,12 +40,6 @@ final class NuveiGateway extends AbstractGateway implements Gateway, ResolvesGat
     public function setGatewayCustomerRepository(GatewayCustomerRepository $repository): void
     {
         $this->gatewayCustomerRepository = $repository;
-    }
-
-    #[Override]
-    public function setCustomerIdentitySource(CustomerIdentitySource $source): void
-    {
-        $this->customerIdentitySource = $source;
     }
 
     #[Override]
@@ -147,6 +138,7 @@ final class NuveiGateway extends AbstractGateway implements Gateway, ResolvesGat
         return $this;
     }
 
+    #[Override]
     public function createCustomer(array $parameters = []): AbstractRequest
     {
         return $this->createRequest(CreateCustomerRequest::class, $parameters);
@@ -301,23 +293,18 @@ final class NuveiGateway extends AbstractGateway implements Gateway, ResolvesGat
      * ones.
      */
     /**
-     * Which `userTokenId` Nuvei knows this customer under.
+     * The reference this gateway knows one of our customers under, and nothing more.
      *
-     * Nuvei documents that field as the id which "uniquely identifies your consumer/user in your
-     * system", and requires it to charge a stored `userPaymentOptionId` again. This package used
-     * to put the **email** there, so a customer who changed it became a different customer and
-     * their saved cards were orphaned; two people sharing an address were one customer; and a
-     * customer with no email — optional on our side — got an empty token, which Nuvei rejects, so
-     * the field was omitted and the stored-card payment failed.
+     * **Lookup only, and there is no creating variant.** Bringing a customer into existence at a
+     * provider is its own operation now — {@see \Techork\PaymentService\Gateway\Contract\PaymentGatewayInterface::registerCustomer()},
+     * driven by whoever holds the customer. It used to be a lookup-or-create hidden here, which
+     * meant saving a card could mint a provider-side customer as a side effect, and taking a
+     * payment could mint one that cannot possibly own the instrument being charged: an attached
+     * instrument belongs to the customer it was attached to, so a customer created now is a stray
+     * one and the charge fails anyway.
      *
-     * The token is now our customer id, and there is **no fallback to the old instrument-keyed
-     * lookup**. With no customer named there is no token, which Nuvei answers plainly, rather
-     * than a customer registered under whatever address rode along with a payment.
-     *
-     * **Do not deploy without the re-keying migration.** Every Nuvei customer that exists today
-     * is keyed by email. Sending a UUID for one Nuvei knows by email creates a *second* Nuvei
-     * customer, and the `userPaymentOptionId` values hang off the first — the saved cards become
-     * unreachable. See A3 in `docs/customer-domain-plan`.
+     * A miss therefore means no customer on this request, which is the same shape as a caller
+     * naming none — and on registration it surfaces as a refusal rather than as an invented person.
      */
     private function resolveCustomerReference(
         ?GatewayCredential $gateway,
@@ -327,36 +314,6 @@ final class NuveiGateway extends AbstractGateway implements Gateway, ResolvesGat
             return null;
         }
 
-        $gatewayId = $gateway->getId();
-
-        return $this->gatewayCustomerRepository->find($gatewayId, $customerId)
-            ?? $this->createCustomerFor($gatewayId, $customerId);
-    }
-
-
-    /**
-     * Registers one of our customers with Nuvei and remembers the pairing.
-     *
-     * The identity comes from the host rather than from whatever address rode along with this
-     * payment, which is what stops `firstName`/`lastName`/`countryCode` being `'N/A'` and `'US'`
-     * whenever that address happened to be incomplete.
-     */
-    private function createCustomerFor(GatewayId $gatewayId, string $customerId): ?string
-    {
-        $identity = $this->customerIdentitySource?->find($customerId);
-
-        if ($identity === null) {
-            return null;
-        }
-
-        $response = $this->createCustomer(['customerIdentity' => $identity, 'userTokenId' => $customerId])->send();
-
-        if (! $response->isSuccessful()) {
-            throw new RuntimeException("Nuvei createCustomer failed: {$response->getMessage()}");
-        }
-
-        $this->gatewayCustomerRepository?->saveReference($gatewayId, $customerId, $customerId);
-
-        return $customerId;
+        return $this->gatewayCustomerRepository->find($gateway->getId(), $customerId);
     }
 }

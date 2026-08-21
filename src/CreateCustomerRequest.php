@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Techork\PaymentService\Nuvei;
 
 use Techork\PaymentService\Common\ValueObject\CustomerIdentity;
+use Techork\PaymentService\Gateway\Exception\RegistrationNeedsCustomer;
 use Override;
 use Techork\PaymentService\Nuvei\Concern\NuveiRequestParameters;
 use Nuvei\Api\RestClient;
@@ -38,13 +39,19 @@ final class CreateCustomerRequest extends AbstractRequest
             ?? ($this->getEmail() !== '' ? $this->getEmail() : $address?->email));
         $state = $address?->state;
 
-        // The token is our customer id when we have one. It used to be the email, which Nuvei
-        // documents as the field that "uniquely identifies your consumer/user in your system" —
-        // so a change of address made a different customer of the same person and orphaned their
-        // saved cards. See {@see \Techork\PaymentService\Nuvei\NuveiGateway} for the migration
-        // this cannot ship without.
+        // The token is our customer id, and there is no fallback to the email. Nuvei documents
+        // this field as what "uniquely identifies your consumer/user in your system", so keying it
+        // on an address makes a different person of the same customer whenever the address
+        // changes, and orphans their stored cards — see A3 in `docs/customer-domain-plan` for the
+        // migration that exists because it used to. Falling back would keep minting the state that
+        // migration is for, and invisibly: the response reports the token as its reference, so the
+        // caller would store (our id → email) and every later lookup would agree with itself.
+        $userTokenId = $this->getUserTokenId() !== ''
+            ? $this->getUserTokenId()
+            : throw RegistrationNeedsCustomer::toRegisterAt('nuvei');
+
         return array_filter([
-            'userTokenId' => $this->getUserTokenId() !== '' ? $this->getUserTokenId() : $email,
+            'userTokenId' => $userTokenId,
             'clientRequestId' => uniqid('cust_', true),
             'email' => $email,
             // The identity first: Nuvei marks these required, and reading them off whatever
@@ -102,6 +109,20 @@ final class CreateCustomerRequest extends AbstractRequest
     public function setUserTokenId(?string $value): self
     {
         return $this->setParameter('userTokenId', $value);
+    }
+
+    /**
+     * The same slot under the name the rest of the system uses.
+     *
+     * `PaymentGatewayRouter` speaks of *our* customer id and must not have to know that Nuvei
+     * calls it `userTokenId` — translating is the adapter's job. It matters that this exists
+     * rather than being left to the caller: Omnipay applies an option only where a matching setter
+     * exists ({@see \Omnipay\Common\Helper::initialize()}), so a key nothing here declares is
+     * dropped without a word.
+     */
+    public function setCustomerId(?string $value): self
+    {
+        return $this->setUserTokenId($value);
     }
 
     public function getUserTokenId(): string

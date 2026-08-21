@@ -9,6 +9,8 @@ use Techork\PaymentService\Nuvei\CreateCustomerRequest;
 use Omnipay\Common\Http\PsrClient as OmnipayClient;
 use Symfony\Component\HttpFoundation\Request as HttpRequest;
 
+const NUVEI_CUSTOMER_ID = '0199f0a2-1c3a-7b8d-9e4f-aabbccddeeff';
+
 function nuveiCustomerAddress(): BillingAddress
 {
     return new BillingAddress(
@@ -25,6 +27,7 @@ function nuveiCustomerAddress(): BillingAddress
 it('fails when no RestClient is available instead of silently succeeding', function () {
     $request = new CreateCustomerRequest(new OmnipayClient, new HttpRequest);
     $request->initialize([
+        'customerId' => NUVEI_CUSTOMER_ID,
         'email' => 'test@example.com',
         'country' => 'US',
     ]);
@@ -45,11 +48,13 @@ it('registers the customer under the name and country it was given', function ()
     // discarded them and every Nuvei customer was registered as "N/A N/A" in the US.
     $request = new CreateCustomerRequest(new OmnipayClient, new HttpRequest);
     $request->initialize([
+        'customerId' => NUVEI_CUSTOMER_ID,
         'billingAddress' => nuveiCustomerAddress(),
     ]);
 
+    // The token is our customer id, not the email it used to fall back to.
     expect($request->getData())
-        ->toHaveKey('userTokenId', 'ada@example.com')
+        ->toHaveKey('userTokenId', NUVEI_CUSTOMER_ID)
         ->toHaveKey('email', 'ada@example.com')
         ->toHaveKey('firstName', 'Ada')
         ->toHaveKey('lastName', 'Lovelace')
@@ -65,7 +70,7 @@ it('falls back to the placeholders Nuvei requires only when there is no address 
     // and a placeholder is the honest answer for a name nobody supplied. They are the last
     // resort now rather than what every customer got.
     $request = new CreateCustomerRequest(new OmnipayClient, new HttpRequest);
-    $request->initialize(['email' => 'test@example.com']);
+    $request->initialize(['customerId' => NUVEI_CUSTOMER_ID, 'email' => 'test@example.com']);
 
     expect($request->getData())
         ->toHaveKey('firstName', 'N/A')
@@ -76,6 +81,7 @@ it('falls back to the placeholders Nuvei requires only when there is no address 
 it('filters out null optional fields', function () {
     $request = new CreateCustomerRequest(new OmnipayClient, new HttpRequest);
     $request->initialize([
+        'customerId' => NUVEI_CUSTOMER_ID,
         'email' => 'test@example.com',
     ]);
 
