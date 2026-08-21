@@ -4,19 +4,29 @@ declare(strict_types=1);
 
 namespace Techork\PaymentService\Nuvei;
 
-use Techork\PaymentService\Common\ValueObject\CustomerIdentity;
-use Techork\PaymentService\Gateway\Exception\RegistrationNeedsCustomer;
-use Override;
-use Techork\PaymentService\Nuvei\Concern\NuveiRequestParameters;
 use Nuvei\Api\RestClient;
 use Nuvei\Api\Service\UserService;
 use Omnipay\Common\Message\AbstractRequest;
+use Override;
+use Techork\PaymentService\Common\ValueObject\CustomerIdentity;
+use Techork\PaymentService\Gateway\Exception\RegistrationNeedsCustomer;
+use Techork\PaymentService\Nuvei\Concern\NuveiRequestParameters;
 use Throwable;
 
 /**
- * Creates a Nuvei user via UserService::createUser().
- * Expects: email, country, restClient (+ optional address, city, postal_code, state).
- * Returns the email (userTokenId) as the transaction reference.
+ * Creates a Nuvei user via `UserService::createUser()`.
+ *
+ * Expects **`customerId`** (equivalently `userTokenId` — {@see setCustomerId()} writes the same
+ * slot) and a `restClient`; refuses without the first, because `userTokenId` is what Nuvei
+ * documents as uniquely identifying a consumer in our system and there is no honest value to
+ * default it to. `customerIdentity` supplies the name and email, `billingAddress` the rest;
+ * placeholders cover only what Nuvei marks required and nobody supplied.
+ *
+ * **Returns our customer id as the transaction reference**, because that is the id Nuvei now knows
+ * this user under — the caller stores the pair, and both halves are ours. It used to return the
+ * email, which is the same sentence read the other way round: the email *was* the token. That is
+ * what {@see \Techork\PaymentService\Gateway\Contract\PaymentGatewayInterface::registerCustomer()}
+ * and A3 in `docs/customer-domain-plan` exist to leave behind.
  */
 final class CreateCustomerRequest extends AbstractRequest
 {
