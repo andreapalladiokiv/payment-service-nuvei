@@ -14,21 +14,19 @@ use Nuvei\Api\Service\Payments\CreditCard as NuveiCreditCardService;
 use Omnipay\Common\AbstractGateway;
 use Omnipay\Common\Message\AbstractRequest;
 use Override;
+use RuntimeException;
 use Techork\PaymentService\Common\Contract\PaymentInstrument;
 use Techork\PaymentService\Common\ValueObject\BillingAddress;
-use Techork\PaymentService\Gateway\Contract\GatewayCustomerRepository;
-use Techork\PaymentService\Gateway\Contract\RegistersCustomers;
-use Techork\PaymentService\Gateway\Contract\ResolvesGatewayCustomers;
-use Techork\PaymentService\Gateway\ValueObject\GatewayId;
+use Techork\PaymentService\Gateway\Contract\CustomerRepository;
 use Techork\PaymentService\Gateway\Exception\UnsupportedOperation;
 use Techork\PaymentService\Gateway\Contract\Gateway;
 use Techork\PaymentService\Gateway\Contract\GatewayCredential;
 
-final class NuveiGateway extends AbstractGateway implements Gateway, RegistersCustomers, ResolvesGatewayCustomers
+final class NuveiGateway extends AbstractGateway implements Gateway
 {
     private RestClient $restClient;
 
-    private ?GatewayCustomerRepository $gatewayCustomerRepository = null;
+    private ?CustomerRepository $customerRepository = null;
 
     #[Override]
     public function getName(): string
@@ -37,9 +35,9 @@ final class NuveiGateway extends AbstractGateway implements Gateway, RegistersCu
     }
 
     #[Override]
-    public function setGatewayCustomerRepository(GatewayCustomerRepository $repository): void
+    public function setCustomerRepository(CustomerRepository $repository): void
     {
-        $this->gatewayCustomerRepository = $repository;
+        $this->customerRepository = $repository;
     }
 
     #[Override]
@@ -138,7 +136,6 @@ final class NuveiGateway extends AbstractGateway implements Gateway, RegistersCu
         return $this;
     }
 
-    #[Override]
     public function createCustomer(array $parameters = []): AbstractRequest
     {
         return $this->createRequest(CreateCustomerRequest::class, $parameters);
@@ -159,7 +156,8 @@ final class NuveiGateway extends AbstractGateway implements Gateway, RegistersCu
     {
         $customerReference = $this->resolveCustomerReference(
             $options['gateway'] ?? null,
-            $options['customerId'] ?? null,
+            $options['instrument'] ?? null,
+            $options['billingAddress'] ?? null,
         );
         if ($customerReference !== null) {
             $options['customerReference'] = $customerReference;
@@ -172,7 +170,8 @@ final class NuveiGateway extends AbstractGateway implements Gateway, RegistersCu
     {
         $customerReference = $this->resolveCustomerReference(
             $options['gateway'] ?? null,
-            $options['customerId'] ?? null,
+            $options['instrument'] ?? null,
+            $options['billingAddress'] ?? null,
         );
         if ($customerReference !== null) {
             $options['customerReference'] = $customerReference;
@@ -185,7 +184,8 @@ final class NuveiGateway extends AbstractGateway implements Gateway, RegistersCu
     {
         $customerReference = $this->resolveCustomerReference(
             $options['gateway'] ?? null,
-            $options['customerId'] ?? null,
+            $options['instrument'] ?? null,
+            $options['billingAddress'] ?? null,
         );
         if ($customerReference !== null) {
             $options['customerReference'] = $customerReference;
@@ -209,7 +209,8 @@ final class NuveiGateway extends AbstractGateway implements Gateway, RegistersCu
     {
         $customerReference = $this->resolveCustomerReference(
             $options['gateway'] ?? null,
-            $options['customerId'] ?? null,
+            $options['instrument'] ?? null,
+            $options['billingAddress'] ?? null,
         );
         if ($customerReference !== null) {
             $options['customerReference'] = $customerReference;
@@ -274,46 +275,46 @@ final class NuveiGateway extends AbstractGateway implements Gateway, RegistersCu
     }
 
     /**
-     * Which `userTokenId` Nuvei knows this customer under.
-     *
-     * Nuvei documents that field as the id which "uniquely identifies your consumer/user in
-     * your system", and requires it to charge a stored `userPaymentOptionId` again. This package
-     * put the **email** there. So a customer who changed their email became a different customer
-     * and their saved cards were orphaned, two people sharing an address were one customer, and
-     * a customer with no email — optional on our side — got an empty token, which Nuvei rejects
-     * outright, so the field was omitted and the stored-card payment failed.
-     *
-     * Told who is paying, the token is the customer id and none of that is expressible.
-     *
-     * **Do not deploy this without the re-keying migration.** Every Nuvei customer that exists
-     * today is keyed by email. Sending a UUID for one Nuvei knows by email creates a *second*
-     * Nuvei customer, and the `userPaymentOptionId` values hang off the first — the saved cards
-     * become unreachable. See A3 in `docs/customer-domain-plan`: either re-register and
-     * re-tokenize, or keep the email token for pre-existing customers and use ids only for new
-     * ones.
-     */
-    /**
-     * The reference this gateway knows one of our customers under, and nothing more.
-     *
-     * **Lookup only, and there is no creating variant.** Bringing a customer into existence at a
-     * provider is its own operation now — {@see \Techork\PaymentService\Gateway\Contract\PaymentGatewayInterface::registerCustomer()},
-     * driven by whoever holds the customer. It used to be a lookup-or-create hidden here, which
-     * meant saving a card could mint a provider-side customer as a side effect, and taking a
-     * payment could mint one that cannot possibly own the instrument being charged: an attached
-     * instrument belongs to the customer it was attached to, so a customer created now is a stray
-     * one and the charge fails anyway.
-     *
-     * A miss therefore means no customer on this request, which is the same shape as a caller
-     * naming none — and on registration it surfaces as a refusal rather than as an invented person.
+     * For Nuvei, the customer reference is the email (userTokenId).
+     * Finds existing or creates a new Nuvei user via createUser API.
      */
     private function resolveCustomerReference(
         ?GatewayCredential $gateway,
-        ?string $customerId = null,
+        ?PaymentInstrument $instrument,
+        ?BillingAddress $billingAddress,
     ): ?string {
-        if ($gateway === null || $customerId === null || $this->gatewayCustomerRepository === null) {
+        if ($this->customerRepository === null || $gateway === null || $instrument === null) {
             return null;
         }
 
-        return $this->gatewayCustomerRepository->find($gateway->getId(), $customerId);
+        $gatewayId = $gateway->getId();
+
+        // An empty-string link counts as missing: legacy rows exist where
+        // `customer_reference` was written as '', and an empty `userTokenId`
+        // makes Nuvei reject any payment that references a stored
+        // userPaymentOptionId.
+        $existing = $this->customerRepository->findByInstrument($gatewayId, $instrument);
+        if ($existing !== null && $existing !== '') {
+            return $existing;
+        }
+
+        if ($billingAddress === null || $billingAddress->email === null) {
+            return null;
+        }
+
+        // One key, the way Stripe already did it. Spreading the address over seven required a
+        // setter for each, and six were missing — so the request received none of them.
+        $response = $this->createCustomer(['billingAddress' => $billingAddress])->send();
+
+        if (! $response->isSuccessful()) {
+            throw new RuntimeException("Nuvei createCustomer failed: {$response->getMessage()}");
+        }
+
+        $customerReference = $response->getTransactionReference()
+            ?? throw new RuntimeException('Nuvei createCustomer returned no reference.');
+
+        $this->customerRepository->saveAndAttach($gatewayId, $instrument, $customerReference);
+
+        return $customerReference;
     }
 }
