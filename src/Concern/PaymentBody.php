@@ -2,17 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Techork\PaymentService\Nuvei;
+namespace Techork\PaymentService\Nuvei\Concern;
 
-use Money\Money;
-use Nuvei\Api\RestClient;
-use Nuvei\Api\Service\PaymentService;
-use Omnipay\Common\Message\AbstractRequest;
-use Omnipay\Common\Message\AbstractResponse;
 use Override;
 use Ramsey\Uuid\Uuid;
 use RuntimeException;
-use Techork\PaymentService\Common\Contract\PaymentInstrument;
 use Techork\PaymentService\Common\Contract\PaymentInstrumentVisitor;
 use Techork\PaymentService\Common\ValueObject\Cash;
 use Techork\PaymentService\Common\ValueObject\CreditCard;
@@ -20,40 +14,54 @@ use Techork\PaymentService\Common\ValueObject\HostedPayment;
 use Techork\PaymentService\Common\ValueObject\PaymentInitiation;
 use Techork\PaymentService\Common\ValueObject\PaymentMethod;
 use Techork\PaymentService\Common\ValueObject\Token;
+use Techork\PaymentService\Gateway\Command\PlacementCommand;
+use Techork\PaymentService\Gateway\Command\RebillingCommand;
 use Techork\PaymentService\Gateway\Exception\IncompleteAuthentication;
 use Techork\PaymentService\Gateway\Exception\UnsupportedInstrument;
-use Techork\PaymentService\Gateway\Concern\InstrumentParameters;
-use Techork\PaymentService\Gateway\Contract\GatewayCredential;
-use Techork\PaymentService\Nuvei\Concern\NuveiRequestParameters;
-use Throwable;
+use Techork\PaymentService\Gateway\ValueObject\GatewayInfrastructure;
+use Techork\PaymentService\Nuvei\NuveiSettings;
 
 /**
- * Base for Nuvei purchase/authorize requests.
- * Subclasses override settleType() and wrapResponse().
+ * The body of a Nuvei payment — `payment.do` — for whichever operation is placing it.
+ *
+ * What used to be an abstract `NuveiPaymentRequest` two requests extended, with `transactionType()`
+ * and `settleType()` as template methods. It is a collaborator now rather than a base class, for a
+ * plain reason: the difference between a sale and a hold is two values on one call, and inheriting
+ * a lifecycle to express two values put the operation's own identity — which endpoint, which
+ * result shape — behind a `send()` that neither subclass could see.
+ *
+ * It visits the instrument itself, so the one place that knows how Nuvei addresses a stored card
+ * is the one place that builds a payment with it.
  *
  * @implements PaymentInstrumentVisitor<array>
  */
-abstract class NuveiPaymentRequest extends AbstractRequest implements PaymentInstrumentVisitor
+final readonly class PaymentBody implements PaymentInstrumentVisitor
 {
-    use InstrumentParameters;
     use NuveiRequestParameters;
 
-    abstract protected function transactionType(): string;
+    /**
+     * @param  string  $operation  Names the path that refused, rather than blaming the gateway as
+     *   a whole: `purchase` and `authorize` accept different instruments from each other, and a
+     *   merchant reading "does not accept a cash instrument" wants to know on which.
+     * @param  string  $customerReference  Nuvei's `userTokenId`, resolved by the gateway before
+     *   the operation was built. Empty means the caller is not in a position to link anything.
+     */
+    public function __construct(
+        private NuveiSettings $settings,
+        private GatewayInfrastructure $infrastructure,
+        private PlacementCommand|RebillingCommand $command,
+        private string $operation,
+        private string $customerReference = '',
+    ) {}
 
-    abstract protected function settleType(): ?int;
-
-    abstract protected function wrapResponse(array $result): AbstractResponse;
-
-    #[Override]
-    public function getData(): array
+    /**
+     * @return array<string, mixed>
+     */
+    public function build(string $transactionType, ?int $settleType): array
     {
-        $this->validate('money', 'instrument', 'gateway');
+        $paymentOption = $this->command->instrument->accept($this);
 
-        /** @var PaymentInstrument $instrument */
-        $instrument = $this->getParameter('instrument');
-        $paymentOption = $instrument->accept($this);
-
-        $threeDS = $this->getThreeDS();
+        $threeDS = $this->command->threeDS;
 
         if ($threeDS !== null) {
             // Nuvei marks eci, cavv and dsTransID all Required inside externalMpi.
@@ -76,7 +84,7 @@ abstract class NuveiPaymentRequest extends AbstractRequest implements PaymentIns
             }
 
             if ($missing !== []) {
-                throw IncompleteAuthentication::missingFields('nuvei', $this->operationLabel(), $missing);
+                throw IncompleteAuthentication::missingFields('nuvei', $this->operation, $missing);
             }
 
             // Restated for the analyser: the collect-then-report form above proves this,
@@ -101,43 +109,42 @@ abstract class NuveiPaymentRequest extends AbstractRequest implements PaymentIns
             }
         }
 
-        /** @var Money $money */
-        $money = $this->getParameter('money');
+        $money = $this->command->amount;
 
         // One id for both fields: with two independent fallback UUIDs a
         // retried request can't be correlated (or deduplicated) by Nuvei.
-        $clientUniqueId = $this->getParameter('clientUniqueId') ?? Uuid::uuid4()->toString();
+        $clientUniqueId = $this->command->clientUniqueId ?? Uuid::uuid4()->toString();
 
         $data = [
-            'sessionToken' => $this->getParameter('sessionToken'),
+            'sessionToken' => $this->settings->sessionToken,
             'clientRequestId' => $clientUniqueId,
             'clientUniqueId' => $clientUniqueId,
             'amount' => $this->formatMoney($money),
             'currency' => $money->getCurrency()->getCode(),
             'paymentOption' => $paymentOption,
-            'transactionType' => $this->transactionType(),
-            'deviceDetails' => ['ipAddress' => $this->getParameter('clientIp') ?? '127.0.0.1'],
-            'billingAddress' => $this->formatBillingAddress($this->getParameter('billingAddress')),
+            'transactionType' => $transactionType,
+            // Nuvei requires the field; nothing upstream carries the buyer's address, and a
+            // command has no slot for one, so the loopback stands in as it always has.
+            'deviceDetails' => ['ipAddress' => '127.0.0.1'],
+            'billingAddress' => $this->formatBillingAddress($this->command->billingAddress),
         ];
 
         // Omit, don't send '': Nuvei rejects an empty userTokenId outright,
         // while a payment without one is valid for non-stored instruments.
         // Stored userPaymentOptionIds still require the owning user — the
         // gateway resolves it via CustomerRepository before building this
-        // request.
-        $userTokenId = $this->getCustomerReference();
-        if ($userTokenId !== '') {
-            $data['userTokenId'] = $userTokenId;
+        // operation.
+        if ($this->customerReference !== '') {
+            $data['userTokenId'] = $this->customerReference;
         }
 
-        $settleType = $this->settleType();
         if ($settleType !== null) {
             $data['settleType'] = $settleType;
         }
 
         $data = [...$data, ...$this->rebilling()];
 
-        $statementDescription = $this->getStatementDescription();
+        $statementDescription = $this->command->statementDescription;
         if ($statementDescription !== null && $statementDescription !== '') {
             $data['dynamicDescriptor'] = ['merchantName' => $statementDescription];
         }
@@ -148,34 +155,36 @@ abstract class NuveiPaymentRequest extends AbstractRequest implements PaymentIns
     #[Override]
     public function visitCreditCard(CreditCard $card): never
     {
-        // Nuvei takes card data only through tokenization (createCard /
-        // createPaymentMethod); a payment request carries the resulting reference.
-        throw UnsupportedInstrument::forGateway('nuvei', $this->operationLabel(), $card);
+        // Nuvei takes card data only through tokenization (tokenize /
+        // registerPaymentMethod); a payment carries the resulting reference.
+        throw UnsupportedInstrument::forGateway('nuvei', $this->operation, $card);
     }
 
     #[Override]
     public function visitCash(Cash $cash): never
     {
-        throw UnsupportedInstrument::forGateway('nuvei', $this->operationLabel(), $cash);
+        throw UnsupportedInstrument::forGateway('nuvei', $this->operation, $cash);
     }
 
+    /**
+     * @return array{card: array{ccTempToken: string}}
+     */
     #[Override]
     public function visitToken(Token $token): array
     {
-        /** @var GatewayCredential $gateway */
-        $gateway = $this->getParameter('gateway');
-        $reference = $this->getReferenceResolver()->find($gateway->getId(), $token)
+        $reference = $this->infrastructure->instruments->find($this->infrastructure->credential->getId(), $token)
             ?? throw new RuntimeException("No Nuvei reference found for token {$token->id}.");
 
         return ['card' => ['ccTempToken' => $reference]];
     }
 
+    /**
+     * @return array{userPaymentOptionId: string}
+     */
     #[Override]
     public function visitPaymentMethod(PaymentMethod $paymentMethod): array
     {
-        /** @var GatewayCredential $gateway */
-        $gateway = $this->getParameter('gateway');
-        $reference = $this->getReferenceResolver()->find($gateway->getId(), $paymentMethod)
+        $reference = $this->infrastructure->instruments->find($this->infrastructure->credential->getId(), $paymentMethod)
             ?? throw new RuntimeException("No Nuvei reference found for payment method {$paymentMethod->id}.");
 
         // No storedCredentials. Their REST 1.0 reference is explicit that merchants
@@ -193,25 +202,11 @@ abstract class NuveiPaymentRequest extends AbstractRequest implements PaymentIns
     }
 
     #[Override]
-    public function sendData($data): AbstractResponse
+    public function visitHostedPayment(HostedPayment $hosted): never
     {
-        try {
-            /** @var RestClient $client */
-            $client = $this->getParameter('restClient');
-            $result = new PaymentService($client)->createPayment($data);
-
-            return $this->wrapResponse($result);
-        } catch (Throwable $e) {
-            return $this->wrapResponse(['status' => 'ERROR', 'reason' => $e->getMessage()]);
-        }
-    }
-
-    #[Override]
-    public function visitHostedPayment(HostedPayment $hosted): array
-    {
-        // Only PurchaseRequest overrides this with the real Cashier build;
-        // every other Nuvei payment request lands here.
-        throw UnsupportedInstrument::forGateway('nuvei', $this->operationLabel(), $hosted);
+        // Only `charge` has a hosted product, and {@see \Techork\PaymentService\Nuvei\Purchase}
+        // answers it before ever building a REST body; every other payment lands here.
+        throw UnsupportedInstrument::forGateway('nuvei', $this->operation, $hosted);
     }
 
     /**
@@ -235,14 +230,17 @@ abstract class NuveiPaymentRequest extends AbstractRequest implements PaymentIns
      */
     private function rebilling(): array
     {
-        if (! $this->isRebilling()) {
+        if (! $this->command instanceof RebillingCommand) {
             // Conditional in their reference — required "when performing
             // recurring/rebilling". A payment outside a series is not that, and "0"
             // here would tell the acquirer to expect renewals that never come.
+            //
+            // Which operation the caller chose is the whole signal, and it is a type
+            // now rather than a `rebilling` flag riding a shared parameter bag.
             return [];
         }
 
-        $anchor = $this->getRebillingReference();
+        $anchor = $this->command->genesisReference;
 
         // "0 – For the first rebilling payment. 1 – For all subsequent rebilling
         // transactions." Position, not who initiated it: a series opened by a present
@@ -258,7 +256,7 @@ abstract class NuveiPaymentRequest extends AbstractRequest implements PaymentIns
         // predating it being carried at all. Declaring that a first payment would
         // tell the acquirer a new series starts on every renewal, so it stays a
         // subsequent one with the reference simply missing.
-        if ($opensTheSeries && $this->getInitiation() === PaymentInitiation::MerchantRecurring) {
+        if ($opensTheSeries && $this->command->initiation === PaymentInitiation::MerchantRecurring) {
             return ['isRebilling' => '1', 'rebillingType' => 'Recurring'];
         }
 
@@ -275,21 +273,10 @@ abstract class NuveiPaymentRequest extends AbstractRequest implements PaymentIns
             // a schedule or on demand. Their other two values, NoShow and
             // DelayedCharges, are industry-specific and need an account-manager
             // conversation before anything may send them.
-            'rebillingType' => $this->getInitiation() === PaymentInitiation::MerchantRecurring
+            'rebillingType' => $this->command->initiation === PaymentInitiation::MerchantRecurring
                 ? 'Recurring'
                 : 'MIT',
             'relatedTransactionId' => $anchor,
         ];
-    }
-
-    /**
-     * Names the path that refused, rather than blaming the gateway as a whole.
-     * Subclasses are named <Operation>Request, so the class name is the label.
-     */
-    private function operationLabel(): string
-    {
-        $short = basename(str_replace('\\', '/', static::class));
-
-        return lcfirst((string) preg_replace('/Request$/', '', $short));
     }
 }

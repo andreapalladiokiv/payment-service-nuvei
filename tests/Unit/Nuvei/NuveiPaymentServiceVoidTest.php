@@ -141,7 +141,7 @@ it('posts to the voidTransaction endpoint under the configured environment', fun
 });
 
 it('fills in the merchant pair and a timestamp the caller never supplies', function () {
-    // VoidRequest::getData() sends three keys and nothing else; everything Nuvei
+    // VoidTransaction::payload() sends three keys and nothing else; everything Nuvei
     // needs to identify the merchant is added here. A missing pair is a rejected
     // void, and the timestamp is part of the checksum below.
     $calls = [];

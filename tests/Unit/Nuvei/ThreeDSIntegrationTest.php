@@ -4,56 +4,30 @@ declare(strict_types=1);
 
 use Money\Currency;
 use Money\Money;
-use Omnipay\Common\Http\PsrClient as OmnipayClient;
-use Symfony\Component\HttpFoundation\Request as HttpRequest;
-use Techork\PaymentService\Common\Contract\DecryptInterface;
-use Techork\PaymentService\Common\ValueObject\BillingAddress;
-use Techork\PaymentService\Common\ValueObject\CardBrand;
-use Techork\PaymentService\Common\ValueObject\Country;
-use Techork\PaymentService\Common\ValueObject\CreditCard;
-use Techork\PaymentService\Common\ValueObject\CreditCard\Cvc;
-use Techork\PaymentService\Common\ValueObject\CreditCard\Expiration;
-use Techork\PaymentService\Common\ValueObject\CreditCard\Holder;
-use Techork\PaymentService\Common\ValueObject\CreditCard\Number;
-use Techork\PaymentService\Common\ValueObject\ExpiresAt;
-use Techork\PaymentService\Common\ValueObject\PaymentMethod;
-use Techork\PaymentService\Common\ValueObject\PaymentMethodId;
-use Techork\PaymentService\Common\ValueObject\Token;
-use Techork\PaymentService\Common\ValueObject\TokenId;
 use Techork\PaymentService\Common\ValueObject\ThreeDS\ECICode;
 use Techork\PaymentService\Common\ValueObject\ThreeDS\ThreeDSResult;
 use Techork\PaymentService\Common\ValueObject\ThreeDS\ThreeDSStatus;
 use Techork\PaymentService\Common\ValueObject\ThreeDS\ThreeDSVersion;
-use Techork\PaymentService\Gateway\Contract\GatewayCredential;
-use Techork\PaymentService\Gateway\Contract\GatewayInstrumentRepository;
-use Techork\PaymentService\Nuvei\PurchaseRequest;
-use Techork\PaymentService\Gateway\ValueObject\GatewayId;
 
-function threeDSNuveiCredential(): GatewayCredential
+/**
+ * Where an externally obtained attestation lands in the body, and that it lands in the right place
+ * for each instrument shape — Nuvei nests `threeD` under `paymentOption.card` for a temp token and
+ * at `paymentOption` level for a stored UPO, because the latter has no `card` key at all.
+ *
+ * Both placements are exercised through {@see \Techork\PaymentService\Nuvei\Purchase} here and
+ * again through {@see \Techork\PaymentService\Nuvei\Authorize}, because the block is assembled once
+ * in the shared payment body and a regression there would silently drop the cryptogram from
+ * whichever operation was not covered.
+ */
+function threeDSAttestation(string $cavv, ECICode $eci, string $dsTransactionId): ThreeDSResult
 {
-    return new readonly class implements GatewayCredential {
-        public function getId(): GatewayId { return GatewayId::generate(); }
-        public function getGatewayName(): string { return 'Nuvei'; }
-        public function getCredentials(): array { return []; }
-    };
-}
-
-function threeDSNuveiRefResolver(string $ref): GatewayInstrumentRepository
-{
-    $mock = Mockery::mock(GatewayInstrumentRepository::class);
-    $mock->shouldReceive('find')->andReturn($ref);
-    $mock->shouldReceive('findMetadata')->andReturn([]);
-
-    return $mock;
-}
-
-function threeDSNuveiTestCard(): CreditCard
-{
-    return new CreditCard(
-        new Number('476134', '1390', CardBrand::Visa),
-        Expiration::fromMonthAndYear(12, 2030),
-        new Holder('Test'),
-        new Cvc,
+    return new ThreeDSResult(
+        ThreeDSStatus::Successful,
+        $cavv,
+        $eci,
+        $dsTransactionId,
+        'acs-txn-def',
+        ThreeDSVersion::V220,
     );
 }
 
@@ -62,34 +36,13 @@ function threeDSNuveiTestCard(): CreditCard
 // ──────────────────────────────────────────────
 
 it('includes externalMpi in card paymentOption when threeDS present', function () {
-    $token = new Token(
-        TokenId::generate(),
-        threeDSNuveiTestCard(),
-        ExpiresAt::fromDateTime(new DateTimeImmutable('+1 hour')),
-    );
-
-    $threeDS = new ThreeDSResult(
-        ThreeDSStatus::Successful,
-        'cavv-value-123',
-        ECICode::VisaSuccessful,
-        'ds-txn-abc',
-        'acs-txn-def',
-        ThreeDSVersion::V220,
-    );
-
-    $request = new PurchaseRequest(new OmnipayClient, new HttpRequest);
-    $request->initialize([
+    $data = nuveiPurchaseOf(nuveiTestToken(), [
         'money' => new Money(5000, new Currency('USD')),
-        'instrument' => $token,
-        'gateway' => threeDSNuveiCredential(),
-        'decrypter' => Mockery::mock(DecryptInterface::class),
-        'referenceResolver' => threeDSNuveiRefResolver('temp_token_xyz'),
+        'reference' => 'temp_token_xyz',
         'sessionToken' => 'sess_789',
         'customerReference' => 'user@test.com',
-        'threeDS' => $threeDS,
-    ]);
-
-    $data = $request->getData();
+        'threeDS' => threeDSAttestation('cavv-value-123', ECICode::VisaSuccessful, 'ds-txn-abc'),
+    ])->payload();
 
     expect($data['paymentOption']['card']['threeD']['externalMpi'])->toBe([
         'eci' => '05',
@@ -104,33 +57,12 @@ it('includes externalMpi in card paymentOption when threeDS present', function (
 // ──────────────────────────────────────────────
 
 it('includes externalMpi at top level for stored payment method', function () {
-    $pm = new PaymentMethod(
-        PaymentMethodId::generate(),
-        threeDSNuveiTestCard(),
-        new BillingAddress('Test', 'User', '1 St', 'NYC', new Country('US'), '10001'),
-    );
-
-    $threeDS = new ThreeDSResult(
-        ThreeDSStatus::Successful,
-        'cavv-pm-value',
-        ECICode::MastercardSuccessful,
-        'ds-txn-pm',
-        'acs-txn-pm',
-        ThreeDSVersion::V220,
-    );
-
-    $request = new PurchaseRequest(new OmnipayClient, new HttpRequest);
-    $request->initialize([
+    $data = nuveiPurchaseOf(nuveiTestPaymentMethod(), [
         'money' => new Money(2000, new Currency('EUR')),
-        'instrument' => $pm,
-        'gateway' => threeDSNuveiCredential(),
-        'decrypter' => Mockery::mock(DecryptInterface::class),
-        'referenceResolver' => threeDSNuveiRefResolver('upo_99999'),
+        'reference' => 'upo_99999',
         'sessionToken' => 'sess_pm',
-        'threeDS' => $threeDS,
-    ]);
-
-    $data = $request->getData();
+        'threeDS' => threeDSAttestation('cavv-pm-value', ECICode::MastercardSuccessful, 'ds-txn-pm'),
+    ])->payload();
 
     // PM paymentOption has no 'card' key, so threeD goes at paymentOption level
     expect($data['paymentOption']['threeD']['externalMpi'])->toBe([
@@ -147,25 +79,37 @@ it('includes externalMpi at top level for stored payment method', function () {
 // ──────────────────────────────────────────────
 
 it('excludes threeD block when threeDS is null', function () {
-    $token = new Token(
-        TokenId::generate(),
-        threeDSNuveiTestCard(),
-        ExpiresAt::fromDateTime(new DateTimeImmutable('+1 hour')),
-    );
-
-    $request = new PurchaseRequest(new OmnipayClient, new HttpRequest);
-    $request->initialize([
+    $data = nuveiPurchaseOf(nuveiTestToken(), [
         'money' => new Money(3000, new Currency('USD')),
-        'instrument' => $token,
-        'gateway' => threeDSNuveiCredential(),
-        'decrypter' => Mockery::mock(DecryptInterface::class),
-        'referenceResolver' => threeDSNuveiRefResolver('temp_token_no3ds'),
+        'reference' => 'temp_token_no3ds',
         'sessionToken' => 'sess_no3ds',
         'customerReference' => 'user@test.com',
-    ]);
-
-    $data = $request->getData();
+    ])->payload();
 
     expect($data['paymentOption']['card'])->not->toHaveKey('threeD')
         ->and($data['paymentOption'])->not->toHaveKey('threeD');
+});
+
+// ──────────────────────────────────────────────
+//  the hold carries the same attestation as the sale
+//
+//  The block is built once for both, so this is what stops the two operations drifting apart.
+// ──────────────────────────────────────────────
+
+it('carries the attestation on an authorization exactly as on a sale', function () {
+    $threeDS = threeDSAttestation('cavv-auth', ECICode::VisaSuccessful, 'ds-txn-auth');
+
+    $authorized = nuveiAuthorizationOf(new Techork\PaymentService\Gateway\Command\PlacementCommand(
+        gatewayId: Techork\PaymentService\Gateway\ValueObject\GatewayId::generate(),
+        instrument: nuveiTestToken(),
+        amount: new Money(5000, new Currency('USD')),
+        threeDS: $threeDS,
+    ), ['reference' => 'temp_token_auth'])->payload();
+
+    expect($authorized['paymentOption']['card']['threeD']['externalMpi'])->toBe([
+        'eci' => '05',
+        'cavv' => 'cavv-auth',
+        'dsTransID' => 'ds-txn-auth',
+        'challengePreference' => 'NoPreference',
+    ]);
 });

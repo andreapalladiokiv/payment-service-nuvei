@@ -9,37 +9,60 @@ DMN webhooks. The Laravel bridge auto-discovers it via `extra.laravel` in
 
 ## Configuration
 
-`NuveiGateway::initialize()` parameters:
+`NuveiGateway::configure(GatewayInfrastructure)` settings, read once into typed
+properties and handed to every operation as a `NuveiSettings`:
 
-| Parameter | Meaning |
+| Setting | Meaning |
 | --- | --- |
 | `merchantId` | Nuvei merchant id |
 | `merchantSiteId` | Nuvei site id |
 | `secretKey` | Merchant secret key (request checksums) |
 | `environment` | `Nuvei\Api\Environment::TEST` (default) or `LIVE` |
-| `sessionToken` | Optional; when omitted the gateway fetches one from Nuvei during `initialize()` (skipped while `merchantId` is empty, i.e. during the bare `AbstractGateway` constructor call) |
+| `sessionToken` | Optional; when omitted the gateway fetches one from Nuvei during `configure()` (skipped while `merchantId` is empty, so a half-filled credential row cannot reach the network) |
+
+`NuveiSettings` carries the configured `RestClient` too, so every operation of a
+configured gateway talks over the same client and the same session.
 
 ## Operations
 
-| Operation | Request class | Nuvei endpoint | Notes |
+| Role | Operation class | Nuvei endpoint | Notes |
 | --- | --- | --- | --- |
-| `purchase` | `PurchaseRequest` | `payment.do` (`Sale`) — or Cashier form | `HostedPayment` instrument switches to the hosted flow (below) |
-| `authorize` | `AuthorizeRequest` | `payment.do` (`Auth`, `settleType=0`) | Pre-auth hold |
-| `capture` | `CaptureRequest` | `settleTransaction.do` | By `transactionReference` |
-| `refund` | `RefundRequest` | `refundTransaction.do` | By `transactionReference` |
-| `retryRefund` | `PayoutRequest` | `payout.do` | Visa OCT / Mastercard MoneySend; independent of the original sale. Raw PANs rejected (PCI scope) — Token/PaymentMethod only |
-| `void` | `VoidRequest` | `voidTransaction.do` | Full-amount void; see quirks |
-| `createCard` | `CreateCardRequest` | `cardTokenization.do` | Raw `CreditCard` → `ccTempToken` |
-| `createPaymentMethod` | `CreatePaymentMethodRequest` | `addUPOCreditCardByTempToken.do` for a `Token`, or `payment.do` (zero-amount `Auth`) for a raw `CreditCard` | `ccTempToken` → permanent UPO (`userPaymentOptionId`); the `Auth` route returns the UPO plus the issuer's AVS/CVV verdicts |
-| `createCustomer` | `CreateCustomerRequest` | `createUser.do` | `userTokenId` = customer email |
-| `updateCustomer` | `UpdateCustomerRequest` | — | No-op; echoes existing reference |
-| `issueVirtualCard` etc. | — | — | Throw `RuntimeException` (no issuing) |
+| `charge` | `Purchase` | `payment.do` (`Sale`) — or Cashier form | `HostedPayment` instrument switches to the hosted flow (below) |
+| `authorize` / `authorizeRebilling` | `Authorize` | `payment.do` (`Auth`, `settleType=0`) | Pre-auth hold; a `RebillingCommand` adds the series block |
+| `capture` | `Capture` | `settleTransaction.do` | By `transactionReference`, restating `transactionType=Settle` in the body |
+| `refund` | `Refund` | `refundTransaction.do` | By `transactionReference` |
+| `retryRefund` | `Payout` | `payout.do` | Visa OCT / Mastercard MoneySend; independent of the original sale. Raw PANs rejected (PCI scope) — Token/PaymentMethod only |
+| `cancel` | `VoidTransaction` | `voidTransaction.do` | Cancelling an intent is voiding its authorization. Full-amount void; see quirks |
+| `tokenize` | `Tokenize` | `cardTokenization.do` | Raw `CreditCard` → `ccTempToken` |
+| `registerPaymentMethod` | `RegisterPaymentMethod` | `addUPOCreditCardByTempToken.do` for a `Token`, or `payment.do` (zero-amount `Auth`) for a raw `CreditCard` | `ccTempToken` → permanent UPO (`userPaymentOptionId`); the `Auth` route returns the UPO plus the issuer's AVS/CVV verdicts |
+| `createCustomer` | `CreateCustomer` | `createUser.do` | `userTokenId` = customer email |
+| `updateCustomer` | `UpdateCustomer` | — | No-op; echoes existing reference |
+| `issueVirtualCard` etc. | — | — | Throw `UnsupportedOperation` (no issuing) |
 
-Instrument mapping in `NuveiPaymentRequest` (visitor): `Token` →
+Every operation has the same three parts: a typed constructor taking the
+settings, whatever infrastructure it needs and the command; a pure `payload()`
+that builds the provider body without touching the network; and one action
+method that makes the call and returns the typed result (`GatewayResult` /
+`AuthorizationResult` / `RegistrationResult`) directly. There is no request
+object with a `getData()`/`sendData()` lifecycle and no response object wrapping
+a payload for something else to re-read.
+
+Each role on `NuveiGateway` builds its operation inline and invokes it; there is
+no accessor handing one back unsent. A test that wants a payload constructs the
+operation itself, since `NuveiSettings` is a public value object.
+
+`payload()` is built OUTSIDE the `try` that wraps the call, which is load-bearing
+rather than stylistic: omnipay's `send()` was `getData()` then `sendData()`, and
+only the sending was ever wrapped. An `UnsupportedInstrument` or an
+`IncompleteAuthentication` therefore propagates — both carry `UnsupportedByGateway`,
+which the gateway stack rethrows rather than folding, so catching one would record
+a wiring error as an acquirer decline for a request no acquirer saw.
+
+Instrument mapping in `Concern\PaymentBody` (visitor): `Token` →
 `card.ccTempToken`, `PaymentMethod` → `userPaymentOptionId` only (no
 `storedCredentialsMode` is sent on payments; mode `'0'` is sent solely by
-`createPaymentMethod`'s zero-amount Auth), raw `CreditCard` throws (tokenize
-first via `createCard`), `Cash` throws. A rebilling series is marked instead by
+`registerPaymentMethod`'s zero-amount Auth), raw `CreditCard` throws (tokenize
+first via `tokenize`), `Cash` throws. A rebilling series is marked instead by
 the root-level `isRebilling`/`rebillingType`/`relatedTransactionId` block that
 `authorizeRebilling` produces. An external 3DS result (`ThreeDSResult`) is
 forwarded as `threeD.externalMpi` (`eci`, `cavv`, `dsTransID`).
@@ -51,35 +74,40 @@ billing address email on a miss, and persists the link. Empty-string legacy
 links count as missing; an empty `userTokenId` is omitted from requests, never
 sent as `''` (Nuvei rejects it).
 
-## Responses
+## Reading an answer
 
-Payment-operation responses (purchase / authorize / capture / refund /
-payout / void) extend `NuveiTransactionResponse`; the tokenization and
-customer responses `CreateCardResponse` and `CreateCustomerResponse` are plain
-Omnipay `AbstractResponse`s, with `CreatePaymentMethodResponse` additionally
-implementing `CardChecksProvider` (checks exist only on the zero-amount Auth
-shape, null on the vault route). Success means
-`status=SUCCESS` **and** `transactionStatus=APPROVED`; `getMessage()` falls
-back `reason` → `gwErrorReason` → `errCode`. It implements three Gateway
-contracts:
+Every transaction endpoint (payment / settle / refund / void / payout) replies
+in one shape, and `NuveiTransactionOutcome` is the single place that reads it.
+Success means `status=SUCCESS` **and** `transactionStatus=APPROVED`; the message
+falls back `reason` → `gwErrorReason` → `errCode`. It folds the answer straight
+into a result:
 
-- `ChallengeProvider` — builds a `ThreeDSChallenge` from
-  `paymentOption.card.threeD.acsUrl` when `transactionStatus=REDIRECT` or
-  3DS `result=C`.
-- `CardChecksProvider` — `NuveiSchemeChecks` maps the scheme AVS letter
-  (`avsCode`) into separate street/postal `CheckResult`s and `cvv2Reply`
-  into a CVC check.
-- `ConvertedAmountProvider` — parses the DCC/MCP `currencyConversion` block
-  into a `Money` in the converted currency (null when no FX happened).
+- `toAuthorizationResult()` for the placements — a `ThreeDSChallenge` built from
+  `paymentOption.card.threeD.acsUrl` (or `methodUrl`, the fingerprinting step)
+  when `transactionStatus=REDIRECT` or 3DS `result=C`, the AVS/CVV verdicts that
+  `NuveiSchemeChecks` decodes from `avsCode` and `cvv2Reply`, the DCC/MCP
+  `currencyConversion` block as a `Money` in the converted currency, and
+  `opening_transaction_reference` metadata naming the transaction that opened
+  the intent.
+- `toGatewayResult()` for capture, refund, void and payout, which carry none of
+  those signals and deliberately record no opening reference — a settle writing
+  that key would bury the authorization's under its own.
 
-`sendData()` never throws: any `Throwable` is wrapped into an `ERROR`
-response.
+A challenge is read before success: a payment awaiting a step-up is neither.
+The two vault operations map their own answers, because Nuvei replies to them
+in shapes nothing else uses — `Tokenize` reads `ccTempToken`, and
+`RegisterPaymentMethod` reads both the flat vault shape and the nested payment
+shape, with card checks only on the latter.
+
+No operation lets a `Throwable` out: a call that never left becomes a failed
+result carrying the reason, because an exception escaping here reaches the event
+stream as an acquirer decline for a request no acquirer ever saw.
 
 ## Hosted payments (Cashier)
 
-`purchase` with a `HostedPayment` instrument makes **no REST call**. It
-returns a `PENDING` response carrying a `RedirectChallenge` whose form the
-browser POSTs to the Cashier (`https://ppp-test.nuvei.com/ppp/purchase.do` on
+`charge` with a `HostedPayment` instrument makes **no REST call**. It returns
+an `AuthorizationResult::requiresAction()` carrying a `RedirectChallenge` whose
+form the browser POSTs to the Cashier (`https://ppp-test.nuvei.com/ppp/purchase.do` on
 TEST, `https://secure.safecharge.com/ppp/purchase.do` on LIVE), checksum
 `sha256(merchantId + siteId + amount + currency + timestamp + secretKey)`.
 The outcome arrives asynchronously as a `Sale` DMN.
@@ -104,9 +132,9 @@ in the `checksum` header).
 | `Credit` | `CreditHandler` | Refund processed / failed (resolved via `relatedTransactionId`); forwards refund fee |
 | `Void` | `VoidHandler` | Cancels the linked PaymentIntent (resolved via `relatedTransactionId`) |
 
-Correlation: requests send the caller's id as `clientUniqueId` — the
+Correlation: operations send the caller's id as `clientUniqueId` — the
 PaymentIntent UUID for top-level ops, or `<uuid>:<verb>` for follow-ups
-(e.g. `:capture`); payment and void requests mirror the same id into
+(e.g. `:capture`); the payment and void bodies mirror the same id into
 `clientRequestId` (capture/refund send `clientUniqueId` only). The
 Sale/Settle handlers recover the UUID via
 `NuveiEvent::clientUniqueIdUuid()` and skip payloads that don't carry one; the
@@ -123,9 +151,9 @@ the billing address from the DMN, backfilling missing fields with
   Nuvei docs and must be omitted — sending a value that differs from the
   original auth by even a cent gets rejected with "Invalid Amount". Voids are
   therefore always full-amount.
-- `PayoutRequest` bypasses the SDK's `Payments\Payout` service and computes
+- `Payout` bypasses the SDK's `Payments\Payout` service and computes
   its own request checksum (also covering `clientUniqueId` + `userTokenId`,
   which the SDK's omits) before posting to `payout.do`.
-- `CreateCustomerRequest` defaults `firstName`/`lastName` to `N/A` and
+- `CreateCustomer` defaults `firstName`/`lastName` to `N/A` and
   `countryCode` to `US` when absent; the "transaction reference" it returns is
   the email/`userTokenId`, not a Nuvei-generated id.

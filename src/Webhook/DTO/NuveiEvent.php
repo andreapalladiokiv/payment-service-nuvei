@@ -70,7 +70,7 @@ final readonly class NuveiEvent
     /**
      * The gateway-side transaction reference, DMN field `TransactionID`.
      *
-     * This is the same value `NuveiTransactionResponse::getTransactionReference()`
+     * This is the same value `NuveiTransactionOutcome::reference()`
      * reads off a synchronous API response, so a transaction we initiated ourselves
      * is already stored under it. `relatedTransactionId` is in this family too,
      * which is the reason a Credit DMN resolves its payment intent while a refund

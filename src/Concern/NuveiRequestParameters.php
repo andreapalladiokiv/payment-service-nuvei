@@ -7,106 +7,48 @@ namespace Techork\PaymentService\Nuvei\Concern;
 use Money\Currencies\ISOCurrencies;
 use Money\Formatter\DecimalMoneyFormatter;
 use Money\Money;
-use Nuvei\Api\RestClient;
+use Ramsey\Uuid\Uuid;
 use Techork\PaymentService\Common\ValueObject\BillingAddress;
 
+/**
+ * The formatting two or more Nuvei operations genuinely share.
+ *
+ * All that is left of a trait that used to be seventeen bag-backed accessors. Every one of those
+ * values now arrives through a constructor — the command's, or
+ * {@see \Techork\PaymentService\Nuvei\NuveiSettings} — so a value can no longer go missing because
+ * a `set…()` was never declared. That was not hypothetical: `setCustomerReference` was written out
+ * three times and omitted from the one request whose only parameter it was, and Omnipay's
+ * initializer applies an option only where a matching setter exists, so every customer update
+ * answered with an empty reference. A constructor argument cannot be forgotten in that direction.
+ */
 trait NuveiRequestParameters
 {
-    public function setRestClient(RestClient $client): self
-    {
-        return $this->setParameter('restClient', $client);
-    }
-
-    public function setSessionToken(?string $value): self
-    {
-        return $this->setParameter('sessionToken', $value);
-    }
-
-    /**
-     * `static`, not `self`: this overrides {@see \Omnipay\Common\Message\AbstractRequest::setMoney},
-     * which is annotated `@return $this`. Naming the using class instead would promise a
-     * fixed type where the parent promises the called one.
-     */
-    public function setMoney(Money $value): static
-    {
-        return $this->setParameter('money', $value);
-    }
-
-    public function setClientId(string $value): self
-    {
-        return $this->setParameter('clientId', $value);
-    }
-
-    public function setClientUniqueId(?string $value): self
-    {
-        return $this->setParameter('clientUniqueId', $value);
-    }
-
-    public function setBillingAddress(?BillingAddress $v): self
-    {
-        return $this->setParameter('billingAddress', $v);
-    }
-
-    /**
-     * Lives here rather than in the requests that need it, which is how it came to be missing
-     * from one of them. Three classes declared this pair identically and
-     * {@see \Techork\PaymentService\Nuvei\UpdateCustomerRequest} — the one whose ONLY
-     * parameter this is — did not, so omnipay dropped the option (it applies one only where a
-     * matching `set…()` exists) and every update answered with an empty reference and an
-     * unsuccessful response.
-     */
-    public function getCustomerReference(): string
-    {
-        return $this->getParameter('customerReference') ?? '';
-    }
-
-    public function setCustomerReference(string $value): static
-    {
-        return $this->setParameter('customerReference', $value);
-    }
-
-    public function getBillingAddress(): ?BillingAddress
-    {
-        $address = $this->getParameter('billingAddress');
-
-        return $address instanceof BillingAddress ? $address : null;
-    }
-
-    public function setEnvironment(string $v): self
-    {
-        return $this->setParameter('environment', $v);
-    }
-
-    public function setMerchantId(string $v): self
-    {
-        return $this->setParameter('merchantId', $v);
-    }
-
-    public function setMerchantSiteId(string $v): self
-    {
-        return $this->setParameter('merchantSiteId', $v);
-    }
-
-    public function setSecretKey(string $v): self
-    {
-        return $this->setParameter('secretKey', $v);
-    }
-
-    public function setStatementDescription(?string $v): self
-    {
-        return $this->setParameter('statementDescription', $v);
-    }
-
-    public function getStatementDescription(): ?string
-    {
-        return $this->getParameter('statementDescription');
-    }
-
     protected function formatMoney(Money $money): string
     {
         return new DecimalMoneyFormatter(new ISOCurrencies)->format($money);
     }
 
+    /**
+     * The body capture and refund share: both name an amount and the transaction they act on, and
+     * nothing else. It was a base class the two requests extended; the two lines of difference
+     * between them are now in the operations themselves, where they read as the endpoint each one
+     * picks rather than as an override.
+     *
+     * @return array<string, mixed>
+     */
+    protected function relatedTransactionBody(Money $money, string $transactionReference, ?string $clientUniqueId): array
+    {
+        return [
+            'clientUniqueId' => $clientUniqueId ?? Uuid::uuid4()->toString(),
+            'amount' => $this->formatMoney($money),
+            'currency' => $money->getCurrency()->getCode(),
+            'relatedTransactionId' => $transactionReference,
+        ];
+    }
+
+    /**
+     * @return array<string, string>
+     */
     protected function formatBillingAddress(?BillingAddress $address): array
     {
         if ($address === null) {

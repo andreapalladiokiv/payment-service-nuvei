@@ -136,7 +136,7 @@ function nuveiProbeCard(): array
 /**
  * How a Nuvei response reports itself. `status` only says the API accepted the
  * request; `transactionStatus` is the outcome, and reading the former alone takes a
- * decline for a success — the same trap CreatePaymentMethodResponse documents.
+ * decline for a success — the same trap RegisterPaymentMethod::map() documents.
  *
  * @param  array<string, mixed>  $result
  * @return array{outcome: string, detail: string, transactionId: ?string}
@@ -171,7 +171,7 @@ function nuveiProbeRead(array $result): array
 }
 
 /**
- * Registers the card exactly as CreatePaymentMethodRequest::verifyCard() does, so
+ * Registers the card exactly as RegisterPaymentMethod::verifyCard() does, so
  * the anchor under test is the one production would actually have.
  *
  * @return array{upo: ?string, anchor: ?string, read: array{outcome: string, detail: string, transactionId: ?string}}
