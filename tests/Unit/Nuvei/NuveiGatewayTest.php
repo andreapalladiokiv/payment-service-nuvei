@@ -32,6 +32,7 @@ use Techork\PaymentService\Gateway\Exception\UnsupportedByGateway;
 use Techork\PaymentService\Gateway\Exception\UnsupportedInstrument;
 use Techork\PaymentService\Gateway\Exception\UnsupportedOperation;
 use Techork\PaymentService\Gateway\ValueObject\CardSpendCategory;
+use Techork\PaymentService\Gateway\Exception\RegistrationNeedsCustomer;
 use Techork\PaymentService\Gateway\ValueObject\GatewayId;
 use Techork\PaymentService\Gateway\ValueObject\GatewayInfrastructure;
 use Techork\PaymentService\Nuvei\Authorize;
@@ -663,3 +664,48 @@ it('registers no customer while taking a payment, whatever the address carries',
         ->and($calls)->toHaveCount(1);
 });
 
+
+/**
+ * Storing an instrument for later use is storing it for somebody, so registering refuses an
+ * unnamed customer where tokenizing does not care.
+ *
+ * Nuvei's own rule rather than a preference: a `userPaymentOptionId` exists only under the
+ * `userTokenId` it was stored against, so a registration with no token produces a stored payment
+ * option nothing can ever quote. What it used to do instead was register a user built out of the
+ * billing address, keyed on that address's email — so the card was attached to whoever the card
+ * was billed to, under an identity that changes when they move.
+ *
+ * A typed refusal and not a failed result: the caller forgot to name a customer, and folding that
+ * into a `RegistrationResult::failed()` would let a wiring mistake of ours read as an acquirer's
+ * verdict.
+ */
+it('refuses to register a payment method for nobody', function () {
+    $gateway = nuveiFacadeGateway(customers: nuveiFacadeCustomerRepository('cust-reference'));
+
+    // Built here rather than through the helper, which defaults a customer in: the absence is
+    // the subject, so it has to be stated rather than defaulted away.
+    expect(fn () => $gateway->registerPaymentMethod(new VaultCommand(
+        gatewayId: GatewayId::generate(),
+        instrument: nuveiTestToken(),
+        clientUniqueId: 'cuid-marker',
+    )))->toThrow(RegistrationNeedsCustomer::class);
+});
+
+/**
+ * And tokenizing the same instrument with the same absence is fine, which is the asymmetry stated
+ * as a test rather than only in a docblock. A `ccTempToken` is one use and then gone — the same
+ * reason the aggregate will not hold one — so there is nobody it needs to belong to.
+ */
+it('tokenizes for nobody without complaint', function () {
+    $calls = [];
+    $gateway = nuveiFacadeRecordingGateway($calls, nuveiFacadeCustomerRepository(null));
+
+    $gateway->tokenize(new VaultCommand(
+        gatewayId: GatewayId::generate(),
+        instrument: nuveiTestCard(),
+        clientUniqueId: 'cuid-marker',
+    ));
+
+    expect($calls)->toHaveCount(1)
+        ->and($calls[0]['params'])->not->toHaveKey('userTokenId');
+});
