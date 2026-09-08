@@ -66,17 +66,10 @@ final class NuveiGateway implements Gateway
 
     private RestClient $restClient;
 
-    private ?GatewayCustomerRepository $customerRepository = null;
-
     #[Override]
     public function getName(): string
     {
         return 'nuvei';
-    }
-
-    public function setCustomerRepository(GatewayCustomerRepository $repository): void
-    {
-        $this->customerRepository = $repository;
     }
 
     public function getMerchantId(): string
@@ -115,7 +108,6 @@ final class NuveiGateway implements Gateway
     public function configure(GatewayInfrastructure $infrastructure): void
     {
         $this->infrastructure = $infrastructure;
-        $this->customerRepository = $infrastructure->customers;
         $this->merchantId = $infrastructure->stringSetting('merchantId');
         $this->merchantSiteId = $infrastructure->stringSetting('merchantSiteId');
         $this->secretKey = $infrastructure->stringSetting('secretKey');
@@ -187,7 +179,7 @@ final class NuveiGateway implements Gateway
             return RegistrationResult::failed($created->message ?? 'Nuvei createUser failed');
         }
 
-        $this->customerRepository?->saveReference(
+        $this->infrastructure()->customers->saveReference(
             $this->infrastructure()->credential->getId(),
             $command->customerId,
             $created->reference,
@@ -361,10 +353,10 @@ final class NuveiGateway implements Gateway
      */
     private function customerFor(?CustomerIdentifier $customerId): string
     {
-        if ($this->customerRepository === null || $customerId === null) {
+        if ($customerId === null) {
             return '';
         }
 
-        return $this->customerRepository->find($this->infrastructure()->credential->getId(), $customerId) ?? '';
+        return $this->infrastructure()->customers->find($this->infrastructure()->credential->getId(), $customerId) ?? '';
     }
 }

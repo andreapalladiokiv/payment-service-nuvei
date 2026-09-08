@@ -603,19 +603,26 @@ it('resolves no customer for tokenization, which links an instrument to nobody',
  * why a raw card could never resolve a customer and an expiring token could — and the key is the
  * person now, so an instrument has nothing to do with the answer.
  */
-it('skips resolution when it has nothing to look a customer up by', function (bool $withRepository, ?CustomerIdentifier $customerId) {
-    $gateway = nuveiFacadeGateway();
-    if ($withRepository) {
-        $gateway->setCustomerRepository(nuveiFacadeCustomerRepository('cust-reference'));
-    }
+/**
+ * Only one row left, and losing the other is the point.
+ *
+ * "No repository" used to be a case because the map arrived through a `setCustomerRepository()`
+ * a driver could be built without. It arrives with `GatewayInfrastructure` now, once, typed, so a
+ * configured gateway always has one and the absence stopped being expressible — the guard for it
+ * went with the setter rather than sitting there unreachable. What remains is the real condition:
+ * a payment that names nobody.
+ *
+ * What was never in this list is an instrument. Resolution used to be keyed on one — which is why
+ * a raw card could never resolve a customer and an expiring token could — and the key is the
+ * person now, so an instrument has nothing to do with the answer.
+ */
+it('skips resolution when the payment names no customer', function () {
+    $gateway = nuveiFacadeGateway(customers: nuveiFacadeCustomerRepository('cust-reference'));
 
     $resolve = new ReflectionMethod($gateway, 'customerFor');
 
-    expect($resolve->invoke($gateway, $customerId))->toBe('');
-})->with([
-    'no repository' => [fn () => [false, nuveiSuiteCustomerId()]],
-    'no customer named' => [fn () => [true, null]],
-]);
+    expect($resolve->invoke($gateway, null))->toBe('');
+});
 
 /**
  * An empty-string reference counts as missing, not as a customer named ''. Legacy rows exist where
