@@ -9,7 +9,9 @@ use Nuvei\Api\RestClient;
 use Techork\PaymentService\Common\Contract\DecryptInterface;
 use Techork\PaymentService\Common\Contract\PaymentInstrument;
 use Techork\PaymentService\Common\ValueObject\BillingAddress;
+use Techork\PaymentService\Common\Contract\CustomerIdentifier;
 use Techork\PaymentService\Common\ValueObject\Country;
+use Techork\PaymentService\Common\ValueObject\Email;
 use Techork\PaymentService\Common\ValueObject\PaymentInitiation;
 use Techork\PaymentService\Common\ValueObject\ThreeDS\ThreeDSResult;
 use Techork\PaymentService\Common\ValueObject\ThreeDS\ThreeDSStatus;
@@ -23,7 +25,7 @@ use Techork\PaymentService\Gateway\Command\RefundCommand;
 use Techork\PaymentService\Gateway\Command\TerminateCardCommand;
 use Techork\PaymentService\Gateway\Command\UpdateCardCommand;
 use Techork\PaymentService\Gateway\Command\VaultCommand;
-use Techork\PaymentService\Gateway\Contract\CustomerRepository;
+use Techork\PaymentService\Gateway\Contract\GatewayCustomerRepository;
 use Techork\PaymentService\Gateway\Contract\GatewayInstrumentRepository;
 use Techork\PaymentService\Gateway\Exception\IncompleteAuthentication;
 use Techork\PaymentService\Gateway\Exception\UnsupportedByGateway;
@@ -65,7 +67,7 @@ use Techork\PaymentService\Nuvei\VoidTransaction;
  */
 function nuveiFacadeGateway(
     array $settings = [],
-    ?CustomerRepository $customers = null,
+    ?GatewayCustomerRepository $customers = null,
     ?GatewayInstrumentRepository $instruments = null,
 ): NuveiGateway {
     $gateway = new NuveiGateway;
@@ -74,7 +76,7 @@ function nuveiFacadeGateway(
         nuveiSuiteCredential(),
         Mockery::mock(DecryptInterface::class),
         $instruments ?? nuveiSuiteInstruments('upo-linked'),
-        $customers ?? Mockery::mock(CustomerRepository::class, ['findByInstrument' => null]),
+        $customers ?? Mockery::mock(GatewayCustomerRepository::class, ['find' => null]),
         $settings + [
             'merchantId' => 'mid-7',
             'merchantSiteId' => 'site-7',
@@ -87,30 +89,36 @@ function nuveiFacadeGateway(
 }
 
 /**
- * A repository whose answer for the existing customer link is fixed up front.
- * Mockery would do, but the interface is two methods and the tests care about
- * the returned value rather than the call, so a stub reads clearer.
+ * The gateway-customer map with its answer fixed up front. Mockery would do, but the interface is
+ * two methods and the tests care about the returned value rather than the call, so a stub reads
+ * clearer.
+ *
+ * `$saved` records the writes so a test can assert that taking a payment performs none: this
+ * gateway used to register a Nuvei user as a side effect of resolution, and the absence of that
+ * is now the behaviour worth pinning.
  */
-function nuveiFacadeCustomerRepository(?string $existingLink): CustomerRepository
+function nuveiFacadeCustomerRepository(?string $existingReference): GatewayCustomerRepository
 {
-    return new readonly class($existingLink) implements CustomerRepository
+    return new class($existingReference) implements GatewayCustomerRepository
     {
-        public function __construct(private ?string $existingLink) {}
+        /** @var list<array{string, string}> */
+        public array $saved = [];
 
-        public function findByInstrument(GatewayId $gatewayId, PaymentInstrument $instrument): ?string
+        public function __construct(private readonly ?string $existingReference) {}
+
+        public function find(GatewayId $gatewayId, CustomerIdentifier $customerId): ?string
         {
-            return $this->existingLink;
+            return $this->existingReference;
         }
 
-        public function saveAndAttach(GatewayId $gatewayId, PaymentInstrument $instrument, string $customerReference): void
+        public function saveReference(GatewayId $gatewayId, CustomerIdentifier $customerId, string $reference): void
         {
-            // No-op: nothing here reaches the create-and-link branch, which
-            // would need a live Nuvei createUser call.
+            $this->saved[] = [$customerId->toString(), $reference];
         }
     };
 }
 
-function nuveiFacadePlacement(?BillingAddress $billingAddress = null): PlacementCommand
+function nuveiFacadePlacement(?BillingAddress $billingAddress = null, ?CustomerIdentifier $customerId = null): PlacementCommand
 {
     return new PlacementCommand(
         gatewayId: GatewayId::generate(),
@@ -119,6 +127,7 @@ function nuveiFacadePlacement(?BillingAddress $billingAddress = null): Placement
         clientUniqueId: 'cuid-marker',
         billingAddress: $billingAddress,
         statementDescription: 'descriptor-marker',
+        customerId: $customerId ?? nuveiSuiteCustomerId(),
     );
 }
 
@@ -127,12 +136,13 @@ function nuveiFacadePlacement(?BillingAddress $billingAddress = null): Placement
  * UPO is the one thing it cannot be handed. Tokenizing wants the other end of that chain, a raw
  * card, so it builds its own command where it is exercised.
  */
-function nuveiFacadeVault(): VaultCommand
+function nuveiFacadeVault(?CustomerIdentifier $customerId = null): VaultCommand
 {
     return new VaultCommand(
         gatewayId: GatewayId::generate(),
         instrument: nuveiTestToken(),
         clientUniqueId: 'cuid-marker',
+        customerId: $customerId ?? nuveiSuiteCustomerId(),
     );
 }
 
@@ -221,7 +231,7 @@ it('does not fetch a session token while the credentials are still blank', funct
         nuveiSuiteCredential(),
         Mockery::mock(DecryptInterface::class),
         nuveiSuiteInstruments(),
-        Mockery::mock(CustomerRepository::class, ['findByInstrument' => null]),
+        Mockery::mock(GatewayCustomerRepository::class, ['find' => null]),
     ));
 
     expect($gateway->getSessionToken())->toBeNull();
@@ -244,7 +254,7 @@ it('does not fetch a session token while the credentials are still blank', funct
 /**
  * @param  array<int, array{url: string, params: array}>  $calls
  */
-function nuveiFacadeRecordingGateway(array &$calls, ?CustomerRepository $customers = null): NuveiGateway
+function nuveiFacadeRecordingGateway(array &$calls, ?GatewayCustomerRepository $customers = null): NuveiGateway
 {
     $gateway = new NuveiGateway;
 
@@ -252,7 +262,7 @@ function nuveiFacadeRecordingGateway(array &$calls, ?CustomerRepository $custome
         nuveiSuiteCredential(),
         nuveiSuiteDecrypter(),
         nuveiSuiteInstruments('upo-linked'),
-        $customers ?? Mockery::mock(CustomerRepository::class, ['findByInstrument' => null]),
+        $customers ?? Mockery::mock(GatewayCustomerRepository::class, ['find' => null]),
         [
             'merchantId' => 'mid-7',
             'merchantSiteId' => 'site-7',
@@ -532,14 +542,14 @@ it('refuses card issuing with the marker that stops it becoming a decline', func
 // ──────────────────────────────────────────────
 
 /**
- * Only the operations that need a `userTokenId` on the wire resolve a customer. The split is pinned
- * in both directions because it is not free: resolution can cost a createUser round trip, so
- * widening it to `capture`, `refund` or `void` would add a network call to operations that
- * reference an existing transaction and need no user at all.
+ * Only the operations that need a `userTokenId` on the wire resolve a customer. The split is
+ * pinned in both directions because it was not free when resolution could cost a createUser round
+ * trip; it is a lookup now, and the split stays because capture, refund and void reference an
+ * existing transaction and have no user to name.
  */
 it('attaches the resolved customer reference to the operations that need one', function (string $role) {
     $calls = [];
-    $gateway = nuveiFacadeRecordingGateway($calls, nuveiFacadeCustomerRepository('linked@example.com'));
+    $gateway = nuveiFacadeRecordingGateway($calls, nuveiFacadeCustomerRepository(nuveiSuiteCustomerId()->toString()));
 
     match ($role) {
         'registerPaymentMethod' => $gateway->registerPaymentMethod(nuveiFacadeVault()),
@@ -547,8 +557,33 @@ it('attaches the resolved customer reference to the operations that need one', f
         default => $gateway->charge(nuveiFacadePlacement()),
     };
 
-    expect($calls[0]['params']['userTokenId'])->toBe('linked@example.com');
+    expect($calls[0]['params']['userTokenId'])->toBe(nuveiSuiteCustomerId()->toString());
 })->with(['registerPaymentMethod', 'charge', 'authorize']);
+
+/**
+ * The defect this whole change exists to remove, stated as a test.
+ *
+ * `userTokenId` was the payer's **email**, and Nuvei documents that field as the id which
+ * "uniquely identifies your consumer/user in your system" and requires it to reuse a stored
+ * `userPaymentOptionId`. So a customer who changed their email became a different customer at
+ * Nuvei and every payment option stored under the old value was orphaned; two people sharing an
+ * address were one customer.
+ *
+ * Both payments below carry the same customer and different emails, and the token does not move.
+ */
+it('keeps the token when the email changes, because an email is not an identity', function () {
+    $calls = [];
+    $gateway = nuveiFacadeRecordingGateway($calls, nuveiFacadeCustomerRepository(nuveiSuiteCustomerId()->toString()));
+
+    foreach (['first@example.com', 'second@example.com'] as $email) {
+        $gateway->charge(nuveiFacadePlacement(
+            new BillingAddress('Ada', 'Lovelace', '1 Street', 'Miami', new Country('US'), '33101', email: new Email($email)),
+        ));
+    }
+
+    expect($calls[0]['params']['userTokenId'])->toBe(nuveiSuiteCustomerId()->toString())
+        ->and($calls[1]['params']['userTokenId'])->toBe(nuveiSuiteCustomerId()->toString());
+});
 
 it('resolves no customer for tokenization, which links an instrument to nobody', function () {
     // Structural rather than conditional: {@see Tokenize} takes no customer reference at all, so
@@ -560,41 +595,35 @@ it('resolves no customer for tokenization, which links an instrument to nobody',
 });
 
 /**
- * Resolution needs all three of a repository, a gateway credential and an instrument; any one
- * missing means the caller is not in a position to link anything. Each row omits exactly one so a
- * future short-circuit that collapses the three checks into one cannot pass by accident.
+ * Resolution needs a repository and a customer named on the command; either missing means there
+ * is nothing to look up. Each row omits exactly one, so a future short-circuit that collapses the
+ * two checks into one cannot pass by accident.
  *
- * Asserted on the resolution itself rather than through an operation. Every operation now carries
- * an instrument by type and a credential by infrastructure, so two of the three absences are no
- * longer expressible at a call site — but the guard is still live inside the gateway, and losing
- * the coverage because the callers got safer would be the wrong trade.
+ * What is no longer in this list is an instrument. Resolution used to be keyed on one — which is
+ * why a raw card could never resolve a customer and an expiring token could — and the key is the
+ * person now, so an instrument has nothing to do with the answer.
  */
-it('skips resolution when the inputs it links are not all present', function (array $options, bool $withRepository) {
+it('skips resolution when it has nothing to look a customer up by', function (bool $withRepository, ?CustomerIdentifier $customerId) {
     $gateway = nuveiFacadeGateway();
     if ($withRepository) {
-        $gateway->setCustomerRepository(nuveiFacadeCustomerRepository('linked@example.com'));
+        $gateway->setCustomerRepository(nuveiFacadeCustomerRepository('cust-reference'));
     }
 
-    $resolve = new ReflectionMethod($gateway, 'resolveCustomerReference');
+    $resolve = new ReflectionMethod($gateway, 'customerFor');
 
-    expect($resolve->invoke($gateway, $options['gateway'] ?? null, $options['instrument'] ?? null, null))->toBeNull();
+    expect($resolve->invoke($gateway, $customerId))->toBe('');
 })->with([
-    'no repository' => [fn () => ['gateway' => nuveiSuiteCredential(), 'instrument' => nuveiTestPaymentMethod()], false],
-    'no gateway credential' => [fn () => ['instrument' => nuveiTestPaymentMethod()], true],
-    'no instrument' => [fn () => ['gateway' => nuveiSuiteCredential()], true],
+    'no repository' => [fn () => [false, nuveiSuiteCustomerId()]],
+    'no customer named' => [fn () => [true, null]],
 ]);
 
 /**
- * An empty-string link counts as missing, not as a customer named ''. Legacy
- * rows exist where `customer_reference` was written as '', and an empty
- * `userTokenId` makes Nuvei reject any payment that references a stored
- * `userPaymentOptionId` — so passing it through would turn a repairable row
- * into a decline.
- *
- * With no billing address there is nothing to create a customer from, so the
- * repair stops here and the field is omitted rather than sent empty.
+ * An empty-string reference counts as missing, not as a customer named ''. Legacy rows exist where
+ * `customer_reference` was written as '', and an empty `userTokenId` makes Nuvei reject any
+ * payment that references a stored `userPaymentOptionId` — so passing it through would turn a
+ * repairable row into a decline. The field is omitted instead.
  */
-it('treats an empty-string customer link as missing', function () {
+it('treats an empty-string customer reference as missing', function () {
     $calls = [];
     nuveiFacadeRecordingGateway($calls, nuveiFacadeCustomerRepository(''))->charge(nuveiFacadePlacement());
 
@@ -602,27 +631,28 @@ it('treats an empty-string customer link as missing', function () {
 });
 
 /**
- * For Nuvei the customer reference IS the email, so an address without one
- * cannot produce a `userTokenId`. Pinned because the alternative — falling
- * through to createUser with an empty email — would register a junk user at
- * the acquirer on every unlinked payment.
+ * Taking a payment registers nobody, and this is the assertion that says so.
+ *
+ * Resolution used to be lookup-**or-create** and hung on `charge` and `authorize` as well as on
+ * the registration, so a payment for an unlinked card built a Nuvei user out of whatever address
+ * rode along with it — under that address's email as the token. Worse, the user it minted could
+ * not own the instrument being charged: a `userPaymentOptionId` exists only under the token it was
+ * stored against, so what was left behind was a stray user and a failed payment.
+ *
+ * A payment for a customer Nuvei has never been told about now sends no token at all, which for a
+ * raw-card one-off is correct and for a stored instrument fails visibly at Nuvei.
  */
-it('does not create a customer from a billing address that carries no email', function () {
+it('registers no customer while taking a payment, whatever the address carries', function () {
     $calls = [];
-    $gateway = nuveiFacadeRecordingGateway($calls, nuveiFacadeCustomerRepository(null));
+    $customers = nuveiFacadeCustomerRepository(null);
 
-    $gateway->charge(nuveiFacadePlacement(
-        new BillingAddress('Test', 'User', '1 Street', 'Miami', new Country('US'), '33101'),
+    nuveiFacadeRecordingGateway($calls, $customers)->charge(nuveiFacadePlacement(
+        new BillingAddress('Ada', 'Lovelace', '1 Street', 'Miami', new Country('US'), '33101', email: new Email('ada@example.com')),
     ));
 
-    expect($calls[0]['params'])->not->toHaveKey('userTokenId');
+    expect($calls[0]['params'])->not->toHaveKey('userTokenId')
+        ->and($customers->saved)->toBeEmpty()
+        // One call, the payment. A createUser would be a second.
+        ->and($calls)->toHaveCount(1);
 });
 
-/*
- * `it('creates the customer when an email is available and nothing is linked yet')` belongs here
- * and is still missing. The createUser round trip is the one resolution branch nothing covers; the
- * tests above reach the gateway's own client by reflection, which is enough to record what a role
- * sent but not to make the SDK's `createUser()` accept a body — it validates a checksum and a
- * merchant pair the recorder never supplies. The branch was equally uncovered before this
- * migration, so nothing regressed; it wants a fixture of its own rather than a widened seam.
- */

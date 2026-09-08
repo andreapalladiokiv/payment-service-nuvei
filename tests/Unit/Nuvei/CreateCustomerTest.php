@@ -4,8 +4,14 @@ declare(strict_types=1);
 
 use Techork\PaymentService\Common\ValueObject\BillingAddress;
 use Techork\PaymentService\Common\ValueObject\Country;
+use Techork\PaymentService\Common\ValueObject\CustomerIdentity;
 use Techork\PaymentService\Common\ValueObject\Email;
 use Techork\PaymentService\Nuvei\CreateCustomer;
+
+function nuveiCustomerIdentity(): CustomerIdentity
+{
+    return new CustomerIdentity('Ada', 'Lovelace', new Email('ada@example.com'));
+}
 
 function nuveiCustomerAddress(): BillingAddress
 {
@@ -26,25 +32,52 @@ it('calls Nuvei rather than answering a no-op success', function () {
     // and the first payment quoting it would be rejected.
     $result = new CreateCustomer(
         nuveiSuiteSettings(['restClient' => nuveiSuiteUnreachableClient()]),
-        email: 'test@example.com',
+        nuveiSuiteCustomerId(),
+        nuveiCustomerIdentity(),
     )->create();
 
     expect($result->success)->toBeFalse()
         ->and($result->message)->toContain('Connection timed out');
 });
 
-it('answers with the email it registered, because for Nuvei that IS the reference', function () {
+/**
+ * The reference for a Nuvei user genuinely is the token WE chose, so the operation answers with
+ * our customer id. It used to answer with the payer's email, because that is what it sent as the
+ * token — and Nuvei documents `userTokenId` as the id that "uniquely identifies your
+ * consumer/user in your system", so an email there made a change of address into a change of
+ * person and orphaned every payment option stored under the old one.
+ */
+it('answers with our customer id, because that is the token it registered', function () {
     $calls = [];
 
     $result = new CreateCustomer(
         nuveiSuiteSettings(['restClient' => nuveiSuiteRecordingClient($calls, ['status' => 'SUCCESS'])]),
+        nuveiSuiteCustomerId(),
+        nuveiCustomerIdentity(),
         nuveiCustomerAddress(),
     )->create();
 
     expect($calls)->toHaveCount(1)
         ->and($calls[0]['url'])->toBe('https://ppp-test.safecharge.com/ppp/api/v1/createUser.do')
         ->and($result->success)->toBeTrue()
-        ->and($result->reference)->toBe('ada@example.com');
+        ->and($result->reference)->toBe(nuveiSuiteCustomerId()->toString());
+});
+
+/**
+ * The token does not move when the email does, which is the whole point of minting it ourselves.
+ */
+it('sends the same token for two identities that differ only by email', function () {
+    $tokens = [];
+
+    foreach (['first@example.com', 'second@example.com'] as $email) {
+        $tokens[] = new CreateCustomer(
+            nuveiSuiteSettings(),
+            nuveiSuiteCustomerId(),
+            new CustomerIdentity('Ada', 'Lovelace', new Email($email)),
+        )->payload()['userTokenId'];
+    }
+
+    expect($tokens)->toBe([nuveiSuiteCustomerId()->toString(), nuveiSuiteCustomerId()->toString()]);
 });
 
 it('reports Nuvei\'s reason when the user was not created', function () {
@@ -52,6 +85,8 @@ it('reports Nuvei\'s reason when the user was not created', function () {
 
     $result = new CreateCustomer(
         nuveiSuiteSettings(['restClient' => nuveiSuiteRecordingClient($calls, ['status' => 'ERROR', 'reason' => 'User already exists'])]),
+        nuveiSuiteCustomerId(),
+        nuveiCustomerIdentity(),
         nuveiCustomerAddress(),
     )->create();
 
@@ -65,10 +100,11 @@ it('registers the customer under the name and country it was given', function ()
     // it went on passing while the parameter was silently dropped and the request's own
     // fallback supplied the answer — a test that could not fail for the defect it covered.
     //
-    // Every field here is read off the BillingAddress. When these keys had no setters, omnipay
-    // discarded them and every Nuvei customer was registered as "N/A N/A" in the US.
-    expect(new CreateCustomer(nuveiSuiteSettings(), nuveiCustomerAddress())->payload())
-        ->toHaveKey('userTokenId', 'ada@example.com')
+    // The person comes from the identity and the place from the address. When these keys had no
+    // setters, omnipay discarded them and every Nuvei customer was registered as "N/A N/A" in
+    // the US.
+    expect(new CreateCustomer(nuveiSuiteSettings(), nuveiSuiteCustomerId(), nuveiCustomerIdentity(), nuveiCustomerAddress())->payload())
+        ->toHaveKey('userTokenId', nuveiSuiteCustomerId()->toString())
         ->toHaveKey('email', 'ada@example.com')
         ->toHaveKey('firstName', 'Ada')
         ->toHaveKey('lastName', 'Lovelace')
@@ -79,28 +115,44 @@ it('registers the customer under the name and country it was given', function ()
         ->toHaveKey('clientRequestId');
 });
 
-it('falls back to the placeholders Nuvei requires only when there is no address at all', function () {
+it('falls back to the placeholders Nuvei requires only when there is nobody to name', function () {
     // The 'N/A' and 'US' defaults stay, because Nuvei marks firstName and lastName required
     // and a placeholder is the honest answer for a name nobody supplied. They are the last
     // resort now rather than what every customer got.
-    expect(new CreateCustomer(nuveiSuiteSettings(), email: 'test@example.com')->payload())
+    expect(new CreateCustomer(nuveiSuiteSettings(), nuveiSuiteCustomerId())->payload())
         ->toHaveKey('firstName', 'N/A')
         ->toHaveKey('lastName', 'N/A')
         ->toHaveKey('countryCode', 'US');
 });
 
-it('refuses a customer with no email before the call leaves, as the SDK always did', function () {
-    // `array_filter` drops an empty email, so `userTokenId` and `email` fall out of the body — and
-    // the SDK's own `createUser()` marks both mandatory and throws `ValidationException` before
-    // anything is sent. That is why the unguarded `$data['userTokenId']` read in the old
-    // `sendData()` — an undefined-key Warning and a null reference — was never actually reached.
-    // The mapping for it is preserved in the operation anyway (a failure with a null reference and
-    // NO message, matching what that response would have carried), but this is the answer a caller
-    // gets: the SDK's refusal, folded into a failed result rather than thrown.
+/**
+ * With nobody named, the address still answers for the person — it is where the payer's name and
+ * email have been kept all along, so it is the honest reading of what we have. It stops being
+ * consulted the moment an identity arrives.
+ */
+it('reads the person off the address when no identity was passed', function () {
+    expect(new CreateCustomer(nuveiSuiteSettings(), nuveiSuiteCustomerId(), null, nuveiCustomerAddress())->payload())
+        ->toHaveKey('firstName', 'Ada')
+        ->toHaveKey('lastName', 'Lovelace')
+        ->toHaveKey('email', 'ada@example.com');
+});
+
+it('refuses a customer with no token before the call leaves, as the SDK always did', function () {
+    // `array_filter` drops an empty token, so `userTokenId` falls out of the body — and the SDK's
+    // own `createUser()` marks it mandatory and throws `ValidationException` before anything is
+    // sent. This is the answer a caller gets: the SDK's refusal, folded into a failed result
+    // rather than thrown.
+    //
+    // Unreachable through the gateway, which refuses an empty customer id with
+    // {@see \Techork\PaymentService\Gateway\Exception\RegistrationNeedsCustomer} first. It used
+    // to be reachable, and by the commonest route there was: the token was the email, the email
+    // was optional on our side, so a customer with no email had no token.
     $calls = [];
 
     $result = new CreateCustomer(
         nuveiSuiteSettings(['restClient' => nuveiSuiteRecordingClient($calls, ['status' => 'SUCCESS'])]),
+        nuveiSuiteCustomerId(''),
+        nuveiCustomerIdentity(),
     )->create();
 
     expect($result->success)->toBeFalse()
@@ -111,7 +163,7 @@ it('refuses a customer with no email before the call leaves, as the SDK always d
 });
 
 it('filters out null optional fields', function () {
-    $data = new CreateCustomer(nuveiSuiteSettings(), email: 'test@example.com')->payload();
+    $data = new CreateCustomer(nuveiSuiteSettings(), nuveiSuiteCustomerId(), nuveiCustomerIdentity())->payload();
 
     expect($data)->not->toHaveKey('address')
         ->and($data)->not->toHaveKey('city')

@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 use Techork\PaymentService\Common\Contract\DecryptInterface;
-use Techork\PaymentService\Gateway\Contract\CustomerRepository;
+use Techork\PaymentService\Gateway\Contract\GatewayCustomerRepository;
 use Techork\PaymentService\Gateway\Contract\GatewayCredential;
 use Techork\PaymentService\Gateway\Contract\GatewayInstrumentRepository;
 use Techork\PaymentService\Gateway\ValueObject\GatewayId;
@@ -63,7 +63,7 @@ it('answers with the reference it was given for an update the facade builds', fu
         Mockery::mock(GatewayCredential::class, ['getId' => GatewayId::generate()]),
         Mockery::mock(DecryptInterface::class),
         Mockery::mock(GatewayInstrumentRepository::class, ['find' => null]),
-        Mockery::mock(CustomerRepository::class, ['findByInstrument' => null]),
+        Mockery::mock(GatewayCustomerRepository::class, ['find' => null]),
         [
             'merchantId' => 'mid-1',
             'merchantSiteId' => 'site-1',

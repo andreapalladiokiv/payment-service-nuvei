@@ -5,29 +5,34 @@ declare(strict_types=1);
 namespace Techork\PaymentService\Nuvei;
 
 use Nuvei\Api\Service\UserService;
+use Techork\PaymentService\Common\Contract\CustomerIdentifier;
 use Techork\PaymentService\Common\ValueObject\BillingAddress;
+use Techork\PaymentService\Common\ValueObject\CustomerIdentity;
 use Techork\PaymentService\Gateway\Contract\GatewayResult;
 use Throwable;
 
 /**
  * Registers a Nuvei user — `createUser` — so that stored instruments have an owner to hang off.
  *
- * For Nuvei the customer reference IS the email: it is the `userTokenId` every later payment
- * carrying a stored `userPaymentOptionId` has to name, which is why the operation answers with the
- * email rather than with anything Nuvei minted.
+ * `userTokenId` is OUR customer id, and the operation answers with it rather than with anything
+ * Nuvei minted — the reference for a Nuvei user genuinely is the token we chose, because Nuvei
+ * documents the field as the id that "uniquely identifies your consumer/user in your system" and
+ * requires it to reuse a stored `userPaymentOptionId`.
  *
- * Reached from {@see NuveiGateway::resolveCustomerReference()} when an instrument has no link yet,
- * so it costs a round trip and only the operations that need a `userTokenId` on the wire pay it.
+ * It used to be the payer's **email**, which made the field a value that changes: a customer who
+ * changed address became a different customer and their stored payment options were orphaned,
+ * while two people sharing an address were one customer. A UUID is what the field always wanted.
  *
- * There is no command for this one — it is not a caller's operation, it is the gateway repairing a
- * missing link — so the address and email are plain constructor arguments.
+ * `$identity` supplies the person and `$billingAddress` supplies the address. Both are here
+ * because Nuvei's `createUser` takes both, and separate because they answer different questions.
  */
 final readonly class CreateCustomer
 {
     public function __construct(
         private NuveiSettings $settings,
+        private CustomerIdentifier $customerId,
+        private ?CustomerIdentity $identity = null,
         private ?BillingAddress $billingAddress = null,
-        private string $email = '',
     ) {}
 
     /**
@@ -45,15 +50,19 @@ final readonly class CreateCustomer
     public function payload(): array
     {
         $address = $this->billingAddress;
-        $email = $this->email !== '' ? $this->email : (string) ($address?->email ?? '');
+        $identity = $this->identity;
+        // The identity answers first, the address is the fallback: the address is where the
+        // payer's name and email used to live, one copy per card, so it is still the honest
+        // answer when nobody has been named — and it stops being consulted once somebody has.
+        $email = (string) ($identity?->email ?? $address?->email ?? '');
         $state = $address?->state;
 
         return array_filter([
-            'userTokenId' => $email,
+            'userTokenId' => $this->customerId->toString(),
             'clientRequestId' => uniqid('cust_', true),
             'email' => $email,
-            'firstName' => $address?->firstName ?: 'N/A',
-            'lastName' => $address?->lastName ?: 'N/A',
+            'firstName' => $identity->firstName ?? ($address?->firstName ?: 'N/A'),
+            'lastName' => $identity->lastName ?? ($address?->lastName ?: 'N/A'),
             'countryCode' => $address !== null ? (string) $address->country : 'US',
             'address' => $address?->line,
             'city' => $address?->city,
@@ -76,23 +85,13 @@ final readonly class CreateCustomer
             return GatewayResult::failed((string) ($result['reason'] ?? 'Nuvei createUser failed'));
         }
 
-        // `array_filter` drops an empty email, so a userTokenId can be absent from a body Nuvei
-        // nonetheless accepted.
-        //
-        // What HEAD did with that: `sendData()` read `$data['userTokenId']` unguarded, which
-        // raised an undefined-key Warning and evaluated to null, so the response carried
-        // `['reference' => null]` — unsuccessful, no reference, and NO message, because the
-        // `error` key was only ever set on the other two branches. The warning is not worth
-        // reproducing; the answer is, so this is a failure with a null message rather than a
-        // reason invented here.
-        //
-        // The gateway's caller reads the same thing either way: `resolveCustomerReference()`
-        // interpolates the null message into "Nuvei createCustomer failed: " and throws, exactly
-        // as it did.
+        // The token is what identifies the user, so it is what comes back. An empty one used to
+        // be reachable — `array_filter` dropped an empty email and the token was the email — and
+        // the answer was an unsuccessful result carrying no reference and no message. It is no
+        // longer reachable from the routed operation, which refuses an empty customer id before
+        // getting here, so the branch stays only for a direct caller of this class.
         $reference = $data['userTokenId'] ?? null;
 
-        // `!empty()` was the test, so both null and '' were unsuccessful and both were still handed
-        // back as the reference. Passed through rather than normalised, so neither shape changes.
         return $reference === null || $reference === ''
             ? new GatewayResult(false, $reference, null)
             : GatewayResult::succeeded($reference);

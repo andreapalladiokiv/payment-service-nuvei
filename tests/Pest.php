@@ -26,7 +26,7 @@ use Techork\PaymentService\Common\ValueObject\Token;
 use Techork\PaymentService\Common\ValueObject\TokenId;
 use Techork\PaymentService\Gateway\Command\PlacementCommand;
 use Techork\PaymentService\Gateway\Command\RebillingCommand;
-use Techork\PaymentService\Gateway\Contract\CustomerRepository;
+use Techork\PaymentService\Gateway\Contract\GatewayCustomerRepository;
 use Techork\PaymentService\Gateway\Contract\GatewayCredential;
 use Techork\PaymentService\Gateway\Contract\GatewayInstrumentRepository;
 use Techork\PaymentService\Gateway\ValueObject\GatewayId;
@@ -34,6 +34,7 @@ use Techork\PaymentService\Gateway\ValueObject\GatewayInfrastructure;
 use Techork\PaymentService\Nuvei\Authorize;
 use Techork\PaymentService\Nuvei\NuveiSettings;
 use Techork\PaymentService\Nuvei\Purchase;
+use Techork\PaymentService\Common\Contract\CustomerIdentifier;
 
 /*
 | The two things every Nuvei operation is constructed with, once, instead of the parameter array
@@ -298,7 +299,7 @@ function nuveiSuiteInfrastructure(array $overrides = []): GatewayInfrastructure
         $overrides['credential'] ?? nuveiSuiteCredential(),
         $overrides['decrypter'] ?? nuveiSuiteDecrypter(),
         $overrides['instruments'] ?? nuveiSuiteInstruments(),
-        $overrides['customers'] ?? Mockery::mock(CustomerRepository::class, ['findByInstrument' => null]),
+        $overrides['customers'] ?? Mockery::mock(GatewayCustomerRepository::class, ['find' => null]),
         $overrides['settings'] ?? [],
     );
 }
@@ -344,4 +345,39 @@ function nuveiAuthorizationOf(PlacementCommand|RebillingCommand $command, array 
         $command,
         $overrides['customerReference'] ?? '',
     );
+}
+
+/**
+ * A customer id this package can hold without being able to make one.
+ *
+ * Deliberately NOT `Domain\Customer\ValueObject\CustomerId`: Nuvei depends on `Common` and
+ * `Gateway` and must never load the domain, which is the property
+ * {@see \Techork\PaymentService\Common\Contract\CustomerIdentifier} exists to give — an
+ * adapter names the customer's identity, and cannot mint one. A fake here is that constraint
+ * holding rather than a shortcut around it.
+ */
+function nuveiSuiteCustomerId(string $id = '01920000-0000-7000-8000-00000000cafe'): CustomerIdentifier
+{
+    /**
+     * One instance per id, so a test may compare by identity as well as by value — a fresh object
+     * each call would make `toBe` fail on the same customer.
+     *
+     * @var array<string, CustomerIdentifier>
+     */
+    static $minted = [];
+
+    return $minted[$id] ??= new readonly class($id) implements CustomerIdentifier
+    {
+        public function __construct(private string $id) {}
+
+        public function toString(): string
+        {
+            return $this->id;
+        }
+
+        public function __toString(): string
+        {
+            return $this->id;
+        }
+    };
 }

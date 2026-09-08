@@ -9,20 +9,24 @@ use Nuvei\Api\RestClient;
 use Nuvei\Api\Service\Payments\CreditCard as NuveiCreditCardService;
 use Override;
 use RuntimeException;
+use Techork\PaymentService\Common\Contract\CustomerIdentifier;
 use Techork\PaymentService\Common\Contract\PaymentInstrument;
 use Techork\PaymentService\Common\ValueObject\BillingAddress;
+use Techork\PaymentService\Common\ValueObject\CustomerIdentity;
 use Techork\PaymentService\Gateway\Command\CancelCommand;
 use Techork\PaymentService\Gateway\Command\CaptureCommand;
 use Techork\PaymentService\Gateway\Command\IssueCardCommand;
 use Techork\PaymentService\Gateway\Command\PlacementCommand;
 use Techork\PaymentService\Gateway\Command\RebillingCommand;
 use Techork\PaymentService\Gateway\Command\RefundCommand;
+use Techork\PaymentService\Gateway\Command\RegisterCustomerCommand;
+use Techork\PaymentService\Gateway\Exception\RegistrationNeedsCustomer;
 use Techork\PaymentService\Gateway\Command\TerminateCardCommand;
 use Techork\PaymentService\Gateway\Command\UpdateCardCommand;
 use Techork\PaymentService\Gateway\Command\VaultCommand;
 use Techork\PaymentService\Gateway\Concern\HoldsInfrastructure;
 use Techork\PaymentService\Gateway\Contract\AuthorizationResult;
-use Techork\PaymentService\Gateway\Contract\CustomerRepository;
+use Techork\PaymentService\Gateway\Contract\GatewayCustomerRepository;
 use Techork\PaymentService\Gateway\Contract\Gateway;
 use Techork\PaymentService\Gateway\Contract\GatewayCredential;
 use Techork\PaymentService\Gateway\Contract\GatewayResult;
@@ -62,7 +66,7 @@ final class NuveiGateway implements Gateway
 
     private RestClient $restClient;
 
-    private ?CustomerRepository $customerRepository = null;
+    private ?GatewayCustomerRepository $customerRepository = null;
 
     #[Override]
     public function getName(): string
@@ -70,7 +74,7 @@ final class NuveiGateway implements Gateway
         return 'nuvei';
     }
 
-    public function setCustomerRepository(CustomerRepository $repository): void
+    public function setCustomerRepository(GatewayCustomerRepository $repository): void
     {
         $this->customerRepository = $repository;
     }
@@ -154,14 +158,42 @@ final class NuveiGateway implements Gateway
     }
 
     /**
-     * Registers the Nuvei user an instrument will hang off. Not on the {@see Gateway} contract —
-     * the customer operations are Nuvei's own, reached by the application and by
-     * {@see resolveCustomerReference()} — but shaped like every other role here: it performs the
-     * call and answers with the result, rather than handing back something for the caller to send.
+     * Registers the Nuvei user a stored instrument hangs off, under OUR id for them.
+     *
+     * The application's own entry point; the routed operation is {@see registerCustomer()}. It
+     * used to be reached from resolution on every payment as well, which is what made a charge
+     * able to invent a user.
      */
-    public function createCustomer(?BillingAddress $billingAddress = null, string $email = ''): GatewayResult
+    public function createCustomer(CustomerIdentifier $customerId, ?CustomerIdentity $identity = null, ?BillingAddress $billingAddress = null): GatewayResult
     {
-        return new CreateCustomer($this->settings(), $billingAddress, $email)->create();
+        return new CreateCustomer($this->settings(), $customerId, $identity, $billingAddress)->create();
+    }
+
+    /**
+     * Hold a Nuvei user for one of ours.
+     *
+     * Nuvei qualifies for this role because `createUser` needs no instrument — and it needs this
+     * role more than Stripe does. A `userPaymentOptionId` exists only under the `userTokenId` it
+     * was stored against, and the docs do not promise it survives a change of token, so a user
+     * created *after* a card was stored is useless for that card. Creating one has to be its own
+     * deliberate step, before anything is attached.
+     */
+    #[Override]
+    public function registerCustomer(RegisterCustomerCommand $command): RegistrationResult
+    {
+        $created = $this->createCustomer($command->customerId, $command->identity, $command->billingAddress);
+
+        if (! $created->success || $created->reference === null) {
+            return RegistrationResult::failed($created->message ?? 'Nuvei createUser failed');
+        }
+
+        $this->customerRepository?->saveReference(
+            $this->infrastructure()->credential->getId(),
+            $command->customerId,
+            $created->reference,
+        );
+
+        return RegistrationResult::succeeded($created->reference)->withCustomerReference($created->reference);
     }
 
     public function updateCustomer(string $customerReference = ''): GatewayResult
@@ -179,14 +211,23 @@ final class NuveiGateway implements Gateway
         return new Tokenize($this->settings(), $this->infrastructure(), $command)->tokenize();
     }
 
+    /**
+     * Storing an instrument for later use is storing it for somebody, so unlike `tokenize()` this
+     * refuses an unnamed customer. Nuvei's own rule: a `userPaymentOptionId` exists only under the
+     * `userTokenId` it was stored against, so a registration with no token produces a stored
+     * option nothing can ever quote. It used to register a user built from the billing address
+     * instead, keyed on that address's email.
+     */
     #[Override]
     public function registerPaymentMethod(VaultCommand $command): RegistrationResult
     {
+        $command->customerId ?? throw RegistrationNeedsCustomer::forGateway('nuvei');
+
         return new RegisterPaymentMethod(
             $this->settings(),
             $this->infrastructure(),
             $command,
-            $this->customerFor($command->instrument, $command->billingAddress),
+            $this->customerFor($command->customerId),
         )->register();
     }
 
@@ -197,7 +238,7 @@ final class NuveiGateway implements Gateway
             $this->settings(),
             $this->infrastructure(),
             $command,
-            $this->customerFor($command->instrument, $command->billingAddress),
+            $this->customerFor($command->customerId),
         )->charge();
     }
 
@@ -225,7 +266,7 @@ final class NuveiGateway implements Gateway
             $this->settings(),
             $this->infrastructure(),
             $command,
-            $this->customerFor($command->instrument, $command->billingAddress),
+            $this->customerFor($command->customerId),
         )->authorize();
     }
 
@@ -253,7 +294,7 @@ final class NuveiGateway implements Gateway
             $this->settings(),
             $this->infrastructure(),
             $command,
-            $this->customerFor($command->retryInstrument, null),
+            $this->customerFor($command->customerId),
         )->payout();
     }
 
@@ -297,65 +338,33 @@ final class NuveiGateway implements Gateway
     }
 
     /**
-     * Every operation that carries an instrument gets the customer that instrument belongs to,
-     * resolved once here rather than per operation, and handed to the operation as a constructor
-     * argument. Only the four that need a `userTokenId` on the wire ask for it: resolution can cost
-     * a createUser round trip, so widening it to capture, refund or void would add a network call
-     * to operations that reference an existing transaction and need no user at all.
+     * The `userTokenId` for this payment: our customer id, looked up as this gateway's reference
+     * for them.
      *
      * Empty, not null, because that is what the wire wants: Nuvei rejects an empty `userTokenId`
-     * outright, so an operation omits the field rather than sending one.
+     * outright, so an operation omits the field rather than sending a blank one. Only the
+     * operations that need the field on the wire ask for it — capture, refund and void reference
+     * an existing transaction and need no user at all.
+     *
+     * What this replaced is the defect the whole change exists to remove. `userTokenId` was the
+     * payer's **email**: `CreateCustomer` sent it as the token, and resolution created a user
+     * whenever a card had no link yet. Nuvei documents that field as the id which "uniquely
+     * identifies your consumer/user in your system", so a customer who changed their email became
+     * a different customer and every `userPaymentOptionId` stored under the old one was orphaned;
+     * two people sharing an address were one customer. A UUID is what the field always wanted.
+     *
+     * Resolution is lookup-only now, so it costs no round trip and cannot register anybody:
+     * creating a user is {@see registerCustomer()}. A payment for a customer Nuvei has never been
+     * told about sends no token, which for a raw-card one-off is correct and for a stored
+     * instrument fails at Nuvei — visibly, rather than by quietly attaching the card to a person
+     * assembled from an address.
      */
-    private function customerFor(?PaymentInstrument $instrument, ?BillingAddress $billingAddress): string
+    private function customerFor(?CustomerIdentifier $customerId): string
     {
-        return $this->resolveCustomerReference(
-            $this->infrastructure()->credential,
-            $instrument,
-            $billingAddress,
-        ) ?? '';
-    }
-
-    /**
-     * For Nuvei, the customer reference is the email (userTokenId).
-     * Finds existing or creates a new Nuvei user via createUser API.
-     */
-    private function resolveCustomerReference(
-        ?GatewayCredential $gateway,
-        ?PaymentInstrument $instrument,
-        ?BillingAddress $billingAddress,
-    ): ?string {
-        if ($this->customerRepository === null || $gateway === null || $instrument === null) {
-            return null;
+        if ($this->customerRepository === null || $customerId === null) {
+            return '';
         }
 
-        $gatewayId = $gateway->getId();
-
-        // An empty-string link counts as missing: legacy rows exist where
-        // `customer_reference` was written as '', and an empty `userTokenId`
-        // makes Nuvei reject any payment that references a stored
-        // userPaymentOptionId.
-        $existing = $this->customerRepository->findByInstrument($gatewayId, $instrument);
-        if ($existing !== null && $existing !== '') {
-            return $existing;
-        }
-
-        if ($billingAddress === null || $billingAddress->email === null) {
-            return null;
-        }
-
-        // One value, the way Stripe already did it. Spreading the address over seven parameters
-        // required a setter for each, and six were missing — so the request received none of them.
-        $result = $this->createCustomer($billingAddress);
-
-        if (! $result->success) {
-            throw new RuntimeException("Nuvei createCustomer failed: {$result->message}");
-        }
-
-        $customerReference = $result->reference
-            ?? throw new RuntimeException('Nuvei createCustomer returned no reference.');
-
-        $this->customerRepository->saveAndAttach($gatewayId, $instrument, $customerReference);
-
-        return $customerReference;
+        return $this->customerRepository->find($this->infrastructure()->credential->getId(), $customerId) ?? '';
     }
 }
