@@ -73,7 +73,7 @@ it('uses one id for clientUniqueId and clientRequestId even when generated', fun
 });
 
 it('pays by UPO alone, sending no stored-credential marker of its own', function () {
-    $data = nuveiPurchaseOf(nuveiTestPaymentMethod(), [
+    $data = nuveiPurchaseOf(nuveiTestAttachedPaymentMethod(), [
         'money' => new Money(1000, new Currency('EUR')),
         'reference' => 'upo_12345',
     ])->payload();
@@ -119,7 +119,7 @@ it('includes externalMpi in card paymentOption when threeDS is present', functio
 });
 
 it('includes externalMpi at top level for stored PM when threeDS is present', function () {
-    $data = nuveiPurchaseOf(nuveiTestPaymentMethod(), [
+    $data = nuveiPurchaseOf(nuveiTestAttachedPaymentMethod(), [
         'money' => new Money(2000, new Currency('EUR')),
         'reference' => 'upo_99999',
         'threeDS' => new ThreeDSResult(

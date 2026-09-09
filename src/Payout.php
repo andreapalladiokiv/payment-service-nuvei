@@ -14,6 +14,7 @@ use Techork\PaymentService\Common\Contract\PaymentInstrumentVisitor;
 use Techork\PaymentService\Common\ValueObject\Cash;
 use Techork\PaymentService\Common\ValueObject\CreditCard;
 use Techork\PaymentService\Common\ValueObject\HostedPayment;
+use Techork\PaymentService\Common\ValueObject\AttachedPaymentMethod;
 use Techork\PaymentService\Common\ValueObject\PaymentMethod;
 use Techork\PaymentService\Common\ValueObject\Token;
 use Techork\PaymentService\Gateway\Command\RefundCommand;
@@ -21,6 +22,7 @@ use Techork\PaymentService\Gateway\Contract\GatewayResult;
 use Techork\PaymentService\Gateway\ValueObject\GatewayInfrastructure;
 use Techork\PaymentService\Nuvei\Concern\NuveiRequestParameters;
 use Throwable;
+use Techork\PaymentService\Gateway\Exception\UnsupportedInstrument;
 
 /**
  * Retries a refund onto an alternative instrument via Nuvei's Payout endpoint (Visa OCT /
@@ -123,13 +125,27 @@ final readonly class Payout implements PaymentInstrumentVisitor
     }
 
     /**
+     * Refused: a stored card is charged to somebody, and a bare payment method names nobody.
+     *
+     * What this used to do is now {@see visitAttachedPaymentMethod()}, unchanged apart from
+     * reaching the instrument through the customer that holds it. The refusal is the change:
+     * the payer used to come off the address the payment method carried, so a card was charged
+     * to whoever it happened to be billed to.
+     */
+    #[Override]
+    public function visitPaymentMethod(PaymentMethod $paymentMethod): never
+    {
+        throw UnsupportedInstrument::needsAttachedCustomer('nuvei', 'retryRefund', $paymentMethod);
+    }
+
+    /**
      * @return array{userPaymentOptionId: string}
      */
     #[Override]
-    public function visitPaymentMethod(PaymentMethod $paymentMethod): array
+    public function visitAttachedPaymentMethod(AttachedPaymentMethod $attached): array
     {
-        $reference = $this->infrastructure->instruments->find($this->infrastructure->credential->getId(), $paymentMethod)
-            ?? throw new RuntimeException("No Nuvei reference found for payment method {$paymentMethod->id->toString()}.");
+        $reference = $this->infrastructure->instruments->find($this->infrastructure->credential->getId(), $attached->paymentMethod)
+            ?? throw new RuntimeException("No Nuvei reference found for payment method {$attached->paymentMethod->id->toString()}.");
 
         return ['userPaymentOptionId' => $reference];
     }

@@ -12,6 +12,7 @@ use Techork\PaymentService\Common\Contract\DecryptInterface;
 use Techork\PaymentService\Common\Contract\EncryptInterface;
 use Techork\PaymentService\Common\Contract\PaymentInstrument;
 use Techork\PaymentService\Common\ValueObject\BillingAddress;
+use Techork\PaymentService\Common\ValueObject\Customer;
 use Techork\PaymentService\Common\ValueObject\CardBrand;
 use Techork\PaymentService\Common\ValueObject\Country;
 use Techork\PaymentService\Common\ValueObject\CreditCard;
@@ -20,6 +21,7 @@ use Techork\PaymentService\Common\ValueObject\CreditCard\Expiration;
 use Techork\PaymentService\Common\ValueObject\CreditCard\Holder;
 use Techork\PaymentService\Common\ValueObject\CreditCard\Number;
 use Techork\PaymentService\Common\ValueObject\ExpiresAt;
+use Techork\PaymentService\Common\ValueObject\AttachedPaymentMethod;
 use Techork\PaymentService\Common\ValueObject\PaymentMethod;
 use Techork\PaymentService\Common\ValueObject\PaymentMethodId;
 use Techork\PaymentService\Common\ValueObject\Token;
@@ -34,7 +36,10 @@ use Techork\PaymentService\Gateway\ValueObject\GatewayInfrastructure;
 use Techork\PaymentService\Nuvei\Authorize;
 use Techork\PaymentService\Nuvei\NuveiSettings;
 use Techork\PaymentService\Nuvei\Purchase;
-use Techork\PaymentService\Common\Contract\CustomerIdentifier;
+use Techork\PaymentService\Common\ValueObject\CustomerId;
+use Techork\PaymentService\Common\ValueObject\CustomerIdentity;
+use Techork\PaymentService\Common\ValueObject\Email;
+use Techork\PaymentService\Common\ValueObject\PhoneNumber;
 
 /*
 | The two things every Nuvei operation is constructed with, once, instead of the parameter array
@@ -286,8 +291,19 @@ function nuveiTestPaymentMethod(): PaymentMethod
     return new PaymentMethod(
         PaymentMethodId::generate(),
         nuveiTestCard(),
-        new BillingAddress('Test', 'User', '1 St', 'NYC', new Country('US'), '10001'),
     );
+}
+
+/**
+ * The same stored card with a customer attached — the only form a gateway will take a payment
+ * on.
+ *
+ * A bare `PaymentMethod` is refused by every payment operation now, so the two fixtures are
+ * both needed: this one for the payments, the bare one for the tests that assert the refusal.
+ */
+function nuveiTestAttachedPaymentMethod(): AttachedPaymentMethod
+{
+    return new AttachedPaymentMethod(nuveiSuiteCustomer(), nuveiTestPaymentMethod());
 }
 
 /**
@@ -326,8 +342,7 @@ function nuveiPurchaseOf(PaymentInstrument $instrument, array $overrides = []): 
             instrument: $instrument,
             amount: $overrides['money'] ?? new Money(2500, new Currency('USD')),
             clientUniqueId: $overrides['clientUniqueId'] ?? null,
-            billingAddress: $overrides['billingAddress'] ?? null,
-            threeDS: $overrides['threeDS'] ?? null,
+                threeDS: $overrides['threeDS'] ?? null,
             statementDescription: $overrides['statementDescription'] ?? null,
         ),
         $overrides['customerReference'] ?? '',
@@ -348,36 +363,77 @@ function nuveiAuthorizationOf(PlacementCommand|RebillingCommand $command, array 
 }
 
 /**
- * A customer id this package can hold without being able to make one.
- *
- * Deliberately NOT `Domain\Customer\ValueObject\CustomerId`: Nuvei depends on `Common` and
- * `Gateway` and must never load the domain, which is the property
- * {@see \Techork\PaymentService\Common\Contract\CustomerIdentifier} exists to give — an
- * adapter names the customer's identity, and cannot mint one. A fake here is that constraint
- * holding rather than a shortcut around it.
+ * A customer id for this suite's tests.
  */
-function nuveiSuiteCustomerId(string $id = '01920000-0000-7000-8000-00000000cafe'): CustomerIdentifier
+function nuveiSuiteCustomerId(string $id = '01920000-0000-7000-8000-00000000cafe'): CustomerId
 {
-    /**
-     * One instance per id, so a test may compare by identity as well as by value — a fresh object
-     * each call would make `toBe` fail on the same customer.
-     *
-     * @var array<string, CustomerIdentifier>
-     */
-    static $minted = [];
+    return CustomerId::fromString($id);
+}
 
-    return $minted[$id] ??= new readonly class($id) implements CustomerIdentifier
-    {
-        public function __construct(private string $id) {}
+/**
+ * The payer these tests hand to a command, complete, because a {@see Customer} has no partial
+ * form — an id, a person and an address or nothing at all.
+ *
+ * That completeness is the change worth knowing about here. The id, the identity and the address
+ * used to be three optional arguments a caller could supply any subset of, which is how a
+ * provider-side customer came to be built out of whatever billing address rode along with the
+ * payment. A test that wants to say "no payer" passes null, not a fragment.
+ */
+function nuveiSuiteCustomer(
+    ?CustomerId $id = null,
+    string $firstName = 'Ada',
+    string $lastName = 'Lovelace',
+    ?Email $email = null,
+    ?PhoneNumber $phone = null,
+    ?BillingAddress $address = null,
+): Customer {
+    return new Customer(
+        id: $id ?? nuveiSuiteCustomerId(),
+        identity: new CustomerIdentity($firstName, $lastName, $email, $phone),
+        billingAddress: $address ?? new BillingAddress(
+            line: '1 Main St',
+            city: 'New York',
+            country: new Country('US'),
+            postalCode: '10001',
+        ),
+    );
+}
 
-        public function toString(): string
-        {
-            return $this->id;
-        }
+/**
+ * The one customer a command now takes, assembled from the option keys these tests have used all
+ * along.
+ *
+ * `billingAddress`, `customerId` and `customerIdentity` were three separate command fields and
+ * are one. The keys stay because what each test is *saying* has not changed — "billed here", "for
+ * this customer", "who is this person" — and rewriting every call site to say it a new way would
+ * bury the change that matters in the change that does not.
+ *
+ * Naming any one of them yields a whole customer, which is the design: an address with nobody
+ * attached to it is not expressible any more. A test that means "no payer at all" names none of
+ * the three and gets null.
+ *
+ * @param  array<string, mixed>  $options
+ */
+function nuveiSuiteCustomerFrom(array $options): ?Customer
+{
+    if (array_key_exists('customer', $options)) {
+        return $options['customer'];
+    }
 
-        public function __toString(): string
-        {
-            return $this->id;
-        }
-    };
+    $named = ['billingAddress', 'customerId', 'customerIdentity'];
+    if (! array_filter($named, static fn (string $k): bool => ($options[$k] ?? null) !== null)) {
+        return null;
+    }
+
+    /** @var ?CustomerIdentity $identity */
+    $identity = $options['customerIdentity'] ?? null;
+
+    return nuveiSuiteCustomer(
+        id: $options['customerId'] ?? null,
+        firstName: $identity->firstName ?? 'Ada',
+        lastName: $identity->lastName ?? 'Lovelace',
+        email: $identity->email ?? null,
+        phone: $identity->phone ?? null,
+        address: $options['billingAddress'] ?? null,
+    );
 }

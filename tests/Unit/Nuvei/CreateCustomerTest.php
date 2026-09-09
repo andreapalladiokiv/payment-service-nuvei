@@ -2,7 +2,9 @@
 
 declare(strict_types=1);
 
+use Techork\PaymentService\Common\ShreddingStubs;
 use Techork\PaymentService\Common\ValueObject\BillingAddress;
+use Techork\PaymentService\Common\ValueObject\Customer;
 use Techork\PaymentService\Common\ValueObject\Country;
 use Techork\PaymentService\Common\ValueObject\CustomerIdentity;
 use Techork\PaymentService\Common\ValueObject\Email;
@@ -16,13 +18,28 @@ function nuveiCustomerIdentity(): CustomerIdentity
 function nuveiCustomerAddress(): BillingAddress
 {
     return new BillingAddress(
-        firstName: 'Ada',
-        lastName: 'Lovelace',
         line: 'Unter den Linden 1',
         city: 'Berlin',
         country: new Country('DE'),
         postalCode: '10117',
-        email: new Email('ada@example.com'),
+    );
+}
+
+/**
+ * The payer this operation now takes, from the loose parts these tests were written around.
+ *
+ * `CreateCustomer` used to take the id, the identity and the address as three arguments — the two
+ * optional — so the tests could name any subset. It takes one {@see Customer}; the parts are still
+ * distinct inside it, they are simply no longer separately omissible.
+ */
+function nuveiCustomerFor(?CustomerIdentity $identity = null, ?BillingAddress $address = null): Customer
+{
+    return nuveiSuiteCustomer(
+        firstName: $identity?->firstName ?? 'Ada',
+        lastName: $identity?->lastName ?? 'Lovelace',
+        email: $identity?->email,
+        phone: $identity?->phone,
+        address: $address ?? BillingAddress::unknown(),
     );
 }
 
@@ -32,8 +49,7 @@ it('calls Nuvei rather than answering a no-op success', function () {
     // and the first payment quoting it would be rejected.
     $result = new CreateCustomer(
         nuveiSuiteSettings(['restClient' => nuveiSuiteUnreachableClient()]),
-        nuveiSuiteCustomerId(),
-        nuveiCustomerIdentity(),
+        nuveiCustomerFor(identity: nuveiCustomerIdentity()),
     )->create();
 
     expect($result->success)->toBeFalse()
@@ -52,9 +68,7 @@ it('answers with our customer id, because that is the token it registered', func
 
     $result = new CreateCustomer(
         nuveiSuiteSettings(['restClient' => nuveiSuiteRecordingClient($calls, ['status' => 'SUCCESS'])]),
-        nuveiSuiteCustomerId(),
-        nuveiCustomerIdentity(),
-        nuveiCustomerAddress(),
+        nuveiCustomerFor(identity: nuveiCustomerIdentity(), address: nuveiCustomerAddress()),
     )->create();
 
     expect($calls)->toHaveCount(1)
@@ -72,8 +86,7 @@ it('sends the same token for two identities that differ only by email', function
     foreach (['first@example.com', 'second@example.com'] as $email) {
         $tokens[] = new CreateCustomer(
             nuveiSuiteSettings(),
-            nuveiSuiteCustomerId(),
-            new CustomerIdentity('Ada', 'Lovelace', new Email($email)),
+            nuveiCustomerFor(identity: new CustomerIdentity('Ada', 'Lovelace', new Email($email))),
         )->payload()['userTokenId'];
     }
 
@@ -85,9 +98,7 @@ it('reports Nuvei\'s reason when the user was not created', function () {
 
     $result = new CreateCustomer(
         nuveiSuiteSettings(['restClient' => nuveiSuiteRecordingClient($calls, ['status' => 'ERROR', 'reason' => 'User already exists'])]),
-        nuveiSuiteCustomerId(),
-        nuveiCustomerIdentity(),
-        nuveiCustomerAddress(),
+        nuveiCustomerFor(identity: nuveiCustomerIdentity(), address: nuveiCustomerAddress()),
     )->create();
 
     expect($result->success)->toBeFalse()
@@ -103,7 +114,7 @@ it('registers the customer under the name and country it was given', function ()
     // The person comes from the identity and the place from the address. When these keys had no
     // setters, omnipay discarded them and every Nuvei customer was registered as "N/A N/A" in
     // the US.
-    expect(new CreateCustomer(nuveiSuiteSettings(), nuveiSuiteCustomerId(), nuveiCustomerIdentity(), nuveiCustomerAddress())->payload())
+    expect(new CreateCustomer(nuveiSuiteSettings(), nuveiCustomerFor(nuveiCustomerIdentity(), nuveiCustomerAddress()))->payload())
         ->toHaveKey('userTokenId', nuveiSuiteCustomerId()->toString())
         ->toHaveKey('email', 'ada@example.com')
         ->toHaveKey('firstName', 'Ada')
@@ -115,58 +126,55 @@ it('registers the customer under the name and country it was given', function ()
         ->toHaveKey('clientRequestId');
 });
 
-it('falls back to the placeholders Nuvei requires only when there is nobody to name', function () {
-    // The 'N/A' and 'US' defaults stay, because Nuvei marks firstName and lastName required
-    // and a placeholder is the honest answer for a name nobody supplied. They are the last
-    // resort now rather than what every customer got.
-    expect(new CreateCustomer(nuveiSuiteSettings(), nuveiSuiteCustomerId())->payload())
-        ->toHaveKey('firstName', 'N/A')
-        ->toHaveKey('lastName', 'N/A')
-        ->toHaveKey('countryCode', 'US');
+/**
+ * The `'N/A'` and `'US'` defaults are gone, and what replaced them is a caller that has to say
+ * what it means.
+ *
+ * They existed because Nuvei marks `firstName`, `lastName` and `countryCode` required while all
+ * three arrived through keys omnipay silently dropped — so every customer registered as "N/A N/A"
+ * in the US. A {@see Customer} has a name and a country, so there is no absence left to
+ * substitute for: where either is genuinely unknown the caller says so with the shredding stub
+ * and `ZZ`, which is the same statement made somewhere that knows whether it is true.
+ *
+ * The test that used to sit beside this one — `it('reads the person off the address when no
+ * identity was passed')` — described the fallback the whole split removes, and its premise is no
+ * longer expressible.
+ */
+it('sends what the customer says rather than a placeholder of its own', function () {
+    $unknown = new CreateCustomer(nuveiSuiteSettings(), nuveiSuiteCustomer(
+        firstName: ShreddingStubs::NAME,
+        lastName: ShreddingStubs::NAME,
+        address: BillingAddress::unknown(),
+    ))->payload();
+
+    expect($unknown)
+        ->toHaveKey('firstName', ShreddingStubs::NAME)
+        ->toHaveKey('lastName', ShreddingStubs::NAME)
+        ->toHaveKey('countryCode', ShreddingStubs::COUNTRY);
 });
 
 /**
- * With nobody named, the address still answers for the person — it is where the payer's name and
- * email have been kept all along, so it is the honest reading of what we have. It stops being
- * consulted the moment an identity arrives.
+ * An empty token is not expressible any anymore, which is a better answer than the one this test
+ * used to record.
+ *
+ * It pinned the SDK's own refusal: `array_filter` dropped an empty `userTokenId`, `createUser()`
+ * marks the field mandatory, and the `ValidationException` came back folded into a failed result.
+ * That was reachable by the commonest route there was — the token WAS the payer's email, and an
+ * email was optional on our side, so a customer with no email had no token. The token is a
+ * {@see \Techork\PaymentService\Common\ValueObject\CustomerId} now and refuses the empty
+ * string on construction, so the operation cannot be reached in that state at all.
  */
-it('reads the person off the address when no identity was passed', function () {
-    expect(new CreateCustomer(nuveiSuiteSettings(), nuveiSuiteCustomerId(), null, nuveiCustomerAddress())->payload())
-        ->toHaveKey('firstName', 'Ada')
-        ->toHaveKey('lastName', 'Lovelace')
-        ->toHaveKey('email', 'ada@example.com');
-});
-
-it('refuses a customer with no token before the call leaves, as the SDK always did', function () {
-    // `array_filter` drops an empty token, so `userTokenId` falls out of the body — and the SDK's
-    // own `createUser()` marks it mandatory and throws `ValidationException` before anything is
-    // sent. This is the answer a caller gets: the SDK's refusal, folded into a failed result
-    // rather than thrown.
-    //
-    // Unreachable through the gateway, which refuses an empty customer id with
-    // {@see \Techork\PaymentService\Gateway\Exception\RegistrationNeedsCustomer} first. It used
-    // to be reachable, and by the commonest route there was: the token was the email, the email
-    // was optional on our side, so a customer with no email had no token.
-    $calls = [];
-
-    $result = new CreateCustomer(
-        nuveiSuiteSettings(['restClient' => nuveiSuiteRecordingClient($calls, ['status' => 'SUCCESS'])]),
-        nuveiSuiteCustomerId(''),
-        nuveiCustomerIdentity(),
-    )->create();
-
-    expect($result->success)->toBeFalse()
-        ->and($result->reference)->toBeNull()
-        ->and($result->message)->toContain('userTokenId')
-        // Nothing left the process, which is the point of the SDK's client-side check.
-        ->and($calls)->toBeEmpty();
+it('cannot be given a customer with no token', function () {
+    expect(fn () => nuveiSuiteCustomerId(''))->toThrow(InvalidArgumentException::class);
 });
 
 it('filters out null optional fields', function () {
-    $data = new CreateCustomer(nuveiSuiteSettings(), nuveiSuiteCustomerId(), nuveiCustomerIdentity())->payload();
+    // Only `state` can be genuinely absent now: an address is required on a customer, so the
+    // street, city and zip are always present — as the stub when nobody gave them, which
+    // `array_filter` keeps because a stub is a value.
+    $data = new CreateCustomer(nuveiSuiteSettings(), nuveiCustomerFor(nuveiCustomerIdentity()))->payload();
 
-    expect($data)->not->toHaveKey('address')
-        ->and($data)->not->toHaveKey('city')
-        ->and($data)->not->toHaveKey('zip')
-        ->and($data)->not->toHaveKey('state');
+    expect($data)->not->toHaveKey('state')
+        ->and($data)->toHaveKey('address')
+        ->and($data)->toHaveKey('city');
 });

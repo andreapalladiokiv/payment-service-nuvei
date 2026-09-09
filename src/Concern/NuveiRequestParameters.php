@@ -8,7 +8,7 @@ use Money\Currencies\ISOCurrencies;
 use Money\Formatter\DecimalMoneyFormatter;
 use Money\Money;
 use Ramsey\Uuid\Uuid;
-use Techork\PaymentService\Common\ValueObject\BillingAddress;
+use Techork\PaymentService\Common\ValueObject\Customer;
 
 /**
  * The formatting two or more Nuvei operations genuinely share.
@@ -47,19 +47,28 @@ trait NuveiRequestParameters
     }
 
     /**
+     * Nuvei's `billingAddress` block, which is the payer AND the place — its four person fields
+     * sit in the same object as its six address ones. That is why this takes a whole
+     * {@see Customer}: the person half used to be read off the {@see \Techork\PaymentService\Common\ValueObject\BillingAddress},
+     * which is exactly how an address came to be the record of who was paying, and Nuvei went
+     * furthest with it by keying its user on that address's email.
+     *
      * @return array<string, string>
      */
-    protected function formatBillingAddress(?BillingAddress $address): array
+    protected function formatBillingAddress(?Customer $customer): array
     {
-        if ($address === null) {
+        if ($customer === null) {
             return [];
         }
 
+        $identity = $customer->identity;
+        $address = $customer->billingAddress;
+
         return array_filter([
-            'firstName' => $address->firstName,
-            'lastName' => $address->lastName,
-            'email' => $address->email ? (string) $address->email : null,
-            'phone' => $address->phone ? (string) $address->phone : null,
+            'firstName' => $identity->firstName,
+            'lastName' => $identity->lastName,
+            'email' => $identity->email ? (string) $identity->email : null,
+            'phone' => $identity->phone ? (string) $identity->phone : null,
             'address' => $address->line,
             'addressLine2' => $address->lineExtra !== '' ? $address->lineExtra : null,
             'city' => $address->city,

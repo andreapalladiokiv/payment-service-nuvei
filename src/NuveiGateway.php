@@ -8,11 +8,8 @@ use Nuvei\Api\Environment;
 use Nuvei\Api\RestClient;
 use Nuvei\Api\Service\Payments\CreditCard as NuveiCreditCardService;
 use Override;
-use RuntimeException;
-use Techork\PaymentService\Common\Contract\CustomerIdentifier;
-use Techork\PaymentService\Common\Contract\PaymentInstrument;
-use Techork\PaymentService\Common\ValueObject\BillingAddress;
-use Techork\PaymentService\Common\ValueObject\CustomerIdentity;
+use Techork\PaymentService\Common\ValueObject\CustomerId;
+use Techork\PaymentService\Common\ValueObject\Customer;
 use Techork\PaymentService\Gateway\Command\CancelCommand;
 use Techork\PaymentService\Gateway\Command\CaptureCommand;
 use Techork\PaymentService\Gateway\Command\IssueCardCommand;
@@ -26,9 +23,7 @@ use Techork\PaymentService\Gateway\Command\UpdateCardCommand;
 use Techork\PaymentService\Gateway\Command\VaultCommand;
 use Techork\PaymentService\Gateway\Concern\HoldsInfrastructure;
 use Techork\PaymentService\Gateway\Contract\AuthorizationResult;
-use Techork\PaymentService\Gateway\Contract\GatewayCustomerRepository;
 use Techork\PaymentService\Gateway\Contract\Gateway;
-use Techork\PaymentService\Gateway\Contract\GatewayCredential;
 use Techork\PaymentService\Gateway\Contract\GatewayResult;
 use Techork\PaymentService\Gateway\Contract\RegistrationResult;
 use Techork\PaymentService\Gateway\Contract\VirtualCardResult;
@@ -156,9 +151,9 @@ final class NuveiGateway implements Gateway
      * used to be reached from resolution on every payment as well, which is what made a charge
      * able to invent a user.
      */
-    public function createCustomer(CustomerIdentifier $customerId, ?CustomerIdentity $identity = null, ?BillingAddress $billingAddress = null): GatewayResult
+    public function createCustomer(Customer $customer): GatewayResult
     {
-        return new CreateCustomer($this->settings(), $customerId, $identity, $billingAddress)->create();
+        return new CreateCustomer($this->settings(), $customer)->create();
     }
 
     /**
@@ -173,7 +168,7 @@ final class NuveiGateway implements Gateway
     #[Override]
     public function registerCustomer(RegisterCustomerCommand $command): RegistrationResult
     {
-        $created = $this->createCustomer($command->customerId, $command->identity, $command->billingAddress);
+        $created = $this->createCustomer($command->customer);
 
         if (! $created->success || $created->reference === null) {
             return RegistrationResult::failed($created->message ?? 'Nuvei createUser failed');
@@ -181,7 +176,7 @@ final class NuveiGateway implements Gateway
 
         $this->infrastructure()->customers->saveReference(
             $this->infrastructure()->credential->getId(),
-            $command->customerId,
+            $command->customer->id,
             $created->reference,
         );
 
@@ -213,13 +208,13 @@ final class NuveiGateway implements Gateway
     #[Override]
     public function registerPaymentMethod(VaultCommand $command): RegistrationResult
     {
-        $command->customerId ?? throw RegistrationNeedsCustomer::forGateway('nuvei');
+        $customer = $command->customer ?? throw RegistrationNeedsCustomer::forGateway('nuvei');
 
         return new RegisterPaymentMethod(
             $this->settings(),
             $this->infrastructure(),
             $command,
-            $this->customerFor($command->customerId),
+            $this->customerFor($customer->id),
         )->register();
     }
 
@@ -230,7 +225,7 @@ final class NuveiGateway implements Gateway
             $this->settings(),
             $this->infrastructure(),
             $command,
-            $this->customerFor($command->customerId),
+            $this->customerFor($command->customer?->id),
         )->charge();
     }
 
@@ -258,7 +253,7 @@ final class NuveiGateway implements Gateway
             $this->settings(),
             $this->infrastructure(),
             $command,
-            $this->customerFor($command->customerId),
+            $this->customerFor($command->customer?->id),
         )->authorize();
     }
 
@@ -286,7 +281,7 @@ final class NuveiGateway implements Gateway
             $this->settings(),
             $this->infrastructure(),
             $command,
-            $this->customerFor($command->customerId),
+            $this->customerFor($command->customer?->id),
         )->payout();
     }
 
@@ -351,7 +346,7 @@ final class NuveiGateway implements Gateway
      * instrument fails at Nuvei — visibly, rather than by quietly attaching the card to a person
      * assembled from an address.
      */
-    private function customerFor(?CustomerIdentifier $customerId): string
+    private function customerFor(?CustomerId $customerId): string
     {
         if ($customerId === null) {
             return '';

@@ -96,6 +96,7 @@ final readonly class AuthHandler implements WebhookEventHandler
         }
 
         $billingAddress = PayloadParser::billingAddress($event->payload);
+        $identity = PayloadParser::customerIdentity($event->payload);
 
         try {
             $this->paymentMethodRecorder->onPaymentMethodRecord(
@@ -104,6 +105,7 @@ final readonly class AuthHandler implements WebhookEventHandler
                 paymentMethodReference: $paymentMethodReference,
                 creditCard: $creditCard,
                 billingAddress: $billingAddress,
+                identity: $identity,
             );
         } catch (Throwable $exception) {
             $this->logger->warning('Nuvei Auth DMN: PaymentMethod upsert failed (best-effort)', [

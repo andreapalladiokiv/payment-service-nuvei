@@ -49,7 +49,31 @@ it('fills shredding stubs when required address fields are missing', function ()
     expect($address->city)->toBe('NYC')
         ->and($address->line)->toBe(ShreddingStubs::ADDRESS_LINE)
         ->and((string) $address->country)->toBe(ShreddingStubs::COUNTRY)
-        ->and($address->postalCode)->toBe(ShreddingStubs::POSTAL_CODE)
-        ->and($address->firstName)->toBe(ShreddingStubs::NAME)
-        ->and($address->lastName)->toBe(ShreddingStubs::NAME);
+        ->and($address->postalCode)->toBe(ShreddingStubs::POSTAL_CODE);
+});
+
+/**
+ * The payer Nuvei's billing block names, read separately from the place.
+ *
+ * One parser call used to return both, because a `BillingAddress` held a name and an email — so
+ * a webhook recorded the address and the person as one thing, and the recorder could not tell a
+ * caller which of the two it had. Same stub treatment on this half: a name Nuvei did not send
+ * reads as "no data" rather than being left out.
+ */
+it('parses the payer separately, with stubs for what Nuvei did not send', function () {
+    $named = PayloadParser::customerIdentity([
+        'firstName' => 'Jane',
+        'lastName' => 'Doe',
+        'email' => 'jane@example.com',
+    ]);
+
+    expect($named->firstName)->toBe('Jane')
+        ->and($named->lastName)->toBe('Doe')
+        ->and((string) $named->email)->toBe('jane@example.com');
+
+    $unnamed = PayloadParser::customerIdentity(['city' => 'NYC']);
+
+    expect($unnamed->firstName)->toBe(ShreddingStubs::NAME)
+        ->and($unnamed->lastName)->toBe(ShreddingStubs::NAME)
+        ->and($unnamed->email)->toBeNull();
 });

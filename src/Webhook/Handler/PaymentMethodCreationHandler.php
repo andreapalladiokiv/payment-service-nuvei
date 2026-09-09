@@ -46,6 +46,7 @@ final readonly class PaymentMethodCreationHandler implements WebhookEventHandler
         }
 
         $billingAddress = PayloadParser::billingAddress($event->payload);
+        $identity = PayloadParser::customerIdentity($event->payload);
 
         return match ($this->recorder->onPaymentMethodRecord(
             gatewayId: $gatewayId,
@@ -53,6 +54,7 @@ final readonly class PaymentMethodCreationHandler implements WebhookEventHandler
             paymentMethodReference: $paymentMethodReference,
             creditCard: $creditCard,
             billingAddress: $billingAddress,
+            identity: $identity,
         )) {
             RecorderOutcome::Applied => HandlerOutcome::Processed,
             RecorderOutcome::Skipped => HandlerOutcome::Skipped,

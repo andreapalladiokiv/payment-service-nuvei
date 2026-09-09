@@ -7,11 +7,9 @@ use Money\Money;
 use Nuvei\Api\Environment;
 use Nuvei\Api\RestClient;
 use Techork\PaymentService\Common\Contract\DecryptInterface;
-use Techork\PaymentService\Common\Contract\PaymentInstrument;
 use Techork\PaymentService\Common\ValueObject\BillingAddress;
-use Techork\PaymentService\Common\Contract\CustomerIdentifier;
+use Techork\PaymentService\Common\ValueObject\CustomerId;
 use Techork\PaymentService\Common\ValueObject\Country;
-use Techork\PaymentService\Common\ValueObject\Email;
 use Techork\PaymentService\Common\ValueObject\PaymentInitiation;
 use Techork\PaymentService\Common\ValueObject\ThreeDS\ThreeDSResult;
 use Techork\PaymentService\Common\ValueObject\ThreeDS\ThreeDSStatus;
@@ -35,15 +33,9 @@ use Techork\PaymentService\Gateway\ValueObject\CardSpendCategory;
 use Techork\PaymentService\Gateway\Exception\RegistrationNeedsCustomer;
 use Techork\PaymentService\Gateway\ValueObject\GatewayId;
 use Techork\PaymentService\Gateway\ValueObject\GatewayInfrastructure;
-use Techork\PaymentService\Nuvei\Authorize;
-use Techork\PaymentService\Nuvei\Capture;
 use Techork\PaymentService\Nuvei\NuveiGateway;
-use Techork\PaymentService\Nuvei\Payout;
-use Techork\PaymentService\Nuvei\Purchase;
 use Techork\PaymentService\Nuvei\Refund;
-use Techork\PaymentService\Nuvei\RegisterPaymentMethod;
 use Techork\PaymentService\Nuvei\Tokenize;
-use Techork\PaymentService\Nuvei\VoidTransaction;
 
 /**
  * Facade tests for {@see NuveiGateway}.
@@ -107,28 +99,33 @@ function nuveiFacadeCustomerRepository(?string $existingReference): GatewayCusto
 
         public function __construct(private readonly ?string $existingReference) {}
 
-        public function find(GatewayId $gatewayId, CustomerIdentifier $customerId): ?string
+        public function find(GatewayId $gatewayId, CustomerId $customerId): ?string
         {
             return $this->existingReference;
         }
 
-        public function saveReference(GatewayId $gatewayId, CustomerIdentifier $customerId, string $reference): void
+        public function saveReference(GatewayId $gatewayId, CustomerId $customerId, string $reference): void
         {
             $this->saved[] = [$customerId->toString(), $reference];
         }
     };
 }
 
-function nuveiFacadePlacement(?BillingAddress $billingAddress = null, ?CustomerIdentifier $customerId = null): PlacementCommand
+function nuveiFacadePlacement(?BillingAddress $billingAddress = null, ?CustomerId $customerId = null): PlacementCommand
 {
     return new PlacementCommand(
         gatewayId: GatewayId::generate(),
-        instrument: nuveiTestPaymentMethod(),
+        // Attached, because a payment operation refuses a bare payment method: a stored card is
+        // charged to somebody, and the payer used to be read off the address the instrument
+        // carried.
+        instrument: nuveiTestAttachedPaymentMethod(),
         amount: new Money(1000, new Currency('USD')),
         clientUniqueId: 'cuid-marker',
-        billingAddress: $billingAddress,
         statementDescription: 'descriptor-marker',
-        customerId: $customerId ?? nuveiSuiteCustomerId(),
+        customer: nuveiSuiteCustomer(
+            id: $customerId ?? nuveiSuiteCustomerId(),
+            address: $billingAddress ?? BillingAddress::unknown(),
+        ),
     );
 }
 
@@ -137,13 +134,13 @@ function nuveiFacadePlacement(?BillingAddress $billingAddress = null, ?CustomerI
  * UPO is the one thing it cannot be handed. Tokenizing wants the other end of that chain, a raw
  * card, so it builds its own command where it is exercised.
  */
-function nuveiFacadeVault(?CustomerIdentifier $customerId = null): VaultCommand
+function nuveiFacadeVault(?CustomerId $customerId = null): VaultCommand
 {
     return new VaultCommand(
         gatewayId: GatewayId::generate(),
         instrument: nuveiTestToken(),
         clientUniqueId: 'cuid-marker',
-        customerId: $customerId ?? nuveiSuiteCustomerId(),
+        customer: nuveiSuiteCustomer(id: $customerId ?? nuveiSuiteCustomerId()),
     );
 }
 
@@ -289,7 +286,7 @@ it('sends each role to the Nuvei endpoint that serves it', function (string $rol
         'authorize' => $gateway->authorize(nuveiFacadePlacement()),
         'authorizeRebilling' => $gateway->authorizeRebilling(new RebillingCommand(
             gatewayId: GatewayId::generate(),
-            instrument: nuveiTestPaymentMethod(),
+            instrument: nuveiTestAttachedPaymentMethod(),
             amount: new Money(1000, new Currency('USD')),
             initiation: PaymentInitiation::MerchantRecurring,
             genesisReference: 'genesis-1',
@@ -311,7 +308,7 @@ it('sends each role to the Nuvei endpoint that serves it', function (string $rol
             transactionReference: 'txn-marker',
             amount: new Money(2500, new Currency('USD')),
             clientUniqueId: 'cuid-marker',
-            retryInstrument: nuveiTestPaymentMethod(),
+            retryInstrument: nuveiTestAttachedPaymentMethod(),
         )),
         'cancel' => $gateway->cancel(new CancelCommand(GatewayId::generate(), 'txn-marker', 'cuid-marker')),
         'registerPaymentMethod' => $gateway->registerPaymentMethod(nuveiFacadeVault()),
@@ -357,7 +354,7 @@ it('carries the series position through authorizeRebilling and on no other role'
     $seriesCalls = [];
     nuveiFacadeRecordingGateway($seriesCalls)->authorizeRebilling(new RebillingCommand(
         gatewayId: GatewayId::generate(),
-        instrument: nuveiTestPaymentMethod(),
+        instrument: nuveiTestAttachedPaymentMethod(),
         amount: new Money(1000, new Currency('USD')),
         initiation: PaymentInitiation::MerchantRecurring,
         genesisReference: 'genesis-1',
@@ -401,7 +398,7 @@ it('forwards the transaction a capture, refund, void and payout each act on', fu
         transactionReference: 'txn-marker',
         amount: new Money(2500, new Currency('USD')),
         clientUniqueId: 'cuid-marker',
-        retryInstrument: nuveiTestPaymentMethod(),
+        retryInstrument: nuveiTestAttachedPaymentMethod(),
     );
 
     $refundCalls = [];
@@ -477,7 +474,7 @@ it('lets a payload it cannot build propagate instead of answering with a refusal
         // Required inside externalMpi.
         default => fn () => $gateway->authorize(new PlacementCommand(
             gatewayId: GatewayId::generate(),
-            instrument: nuveiTestPaymentMethod(),
+            instrument: nuveiTestAttachedPaymentMethod(),
             amount: new Money(1000, new Currency('USD')),
             threeDS: new ThreeDSResult(
                 ThreeDSStatus::NotAuthenticated,
@@ -578,7 +575,7 @@ it('keeps the token when the email changes, because an email is not an identity'
 
     foreach (['first@example.com', 'second@example.com'] as $email) {
         $gateway->charge(nuveiFacadePlacement(
-            new BillingAddress('Ada', 'Lovelace', '1 Street', 'Miami', new Country('US'), '33101', email: new Email($email)),
+            new BillingAddress('1 Street', 'Miami', new Country('US'), '33101'),
         ));
     }
 
@@ -655,7 +652,7 @@ it('registers no customer while taking a payment, whatever the address carries',
     $customers = nuveiFacadeCustomerRepository(null);
 
     nuveiFacadeRecordingGateway($calls, $customers)->charge(nuveiFacadePlacement(
-        new BillingAddress('Ada', 'Lovelace', '1 Street', 'Miami', new Country('US'), '33101', email: new Email('ada@example.com')),
+        new BillingAddress('1 Street', 'Miami', new Country('US'), '33101'),
     ));
 
     expect($calls[0]['params'])->not->toHaveKey('userTokenId')

@@ -57,7 +57,7 @@ it('includes externalMpi in card paymentOption when threeDS present', function (
 // ──────────────────────────────────────────────
 
 it('includes externalMpi at top level for stored payment method', function () {
-    $data = nuveiPurchaseOf(nuveiTestPaymentMethod(), [
+    $data = nuveiPurchaseOf(nuveiTestAttachedPaymentMethod(), [
         'money' => new Money(2000, new Currency('EUR')),
         'reference' => 'upo_99999',
         'sessionToken' => 'sess_pm',

@@ -5,9 +5,7 @@ declare(strict_types=1);
 use Money\Currency;
 use Money\Money;
 use Techork\PaymentService\Common\Contract\PaymentInstrument;
-use Techork\PaymentService\Common\ValueObject\BillingAddress;
 use Techork\PaymentService\Common\ValueObject\CardBrand;
-use Techork\PaymentService\Common\ValueObject\Country;
 use Techork\PaymentService\Common\ValueObject\CreditCard;
 use Techork\PaymentService\Common\ValueObject\CreditCard\Cvc;
 use Techork\PaymentService\Common\ValueObject\CreditCard\Expiration;
@@ -21,6 +19,8 @@ use Techork\PaymentService\Common\ValueObject\TokenId;
 use Techork\PaymentService\Gateway\Command\RefundCommand;
 use Techork\PaymentService\Gateway\ValueObject\GatewayId;
 use Techork\PaymentService\Nuvei\Payout;
+use Techork\PaymentService\Common\ValueObject\AttachedPaymentMethod;
+use Techork\PaymentService\Gateway\Exception\UnsupportedInstrument;
 
 /**
  * @param  array<string, mixed>  $overrides
@@ -61,8 +61,8 @@ it('builds payout data for a Token via userPaymentOptionId', function () {
         ->and($data)->toHaveKeys(['clientUniqueId', 'clientRequestId']);
 });
 
-it('builds payout data for a PaymentMethod via userPaymentOptionId', function () {
-    $pm = new PaymentMethod(
+it('builds payout data for an attached PaymentMethod via userPaymentOptionId', function () {
+    $attached = new AttachedPaymentMethod(nuveiSuiteCustomer(), new PaymentMethod(
         PaymentMethodId::fromString('01961f5a-0000-7000-8000-000000000201'),
         new CreditCard(
             new Number('424242', '4242', CardBrand::Visa),
@@ -70,18 +70,29 @@ it('builds payout data for a PaymentMethod via userPaymentOptionId', function ()
             new Holder('Alt Holder'),
             new Cvc,
         ),
-        new BillingAddress(
-            firstName: 'Alt',
-            lastName: 'Holder',
-            line: '1 St',
-            city: 'NYC',
-            country: new Country('US'),
-            postalCode: '10001',
+    ));
+
+    expect(nuveiPayout($attached, ['reference' => 'nuvei-upo-99'])->payload()['userPaymentOption'])
+        ->toBe(['userPaymentOptionId' => 'nuvei-upo-99']);
+});
+
+/**
+ * And a bare one is refused, which matters most on a payout: "refund to a different card" pays a
+ * named user at Nuvei, so an instrument that names nobody has nowhere to send the money.
+ */
+it('refuses a payment method with nobody attached to it', function () {
+    $bare = new PaymentMethod(
+        PaymentMethodId::fromString('01961f5a-0000-7000-8000-000000000202'),
+        new CreditCard(
+            new Number('424242', '4242', CardBrand::Visa),
+            Expiration::fromMonthAndYear(12, 2030),
+            new Holder('Alt Holder'),
+            new Cvc,
         ),
     );
 
-    expect(nuveiPayout($pm, ['reference' => 'nuvei-upo-99'])->payload()['userPaymentOption'])
-        ->toBe(['userPaymentOptionId' => 'nuvei-upo-99']);
+    expect(fn () => nuveiPayout($bare, ['reference' => 'nuvei-upo-99'])->payload())
+        ->toThrow(UnsupportedInstrument::class, 'names no customer');
 });
 
 it('rejects raw credit cards (PCI scope)', function () {

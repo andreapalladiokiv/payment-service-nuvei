@@ -104,7 +104,7 @@ function nuveiRebillingPayload(PaymentInitiation $initiation, ?string $anchor = 
 {
     return nuveiAuthorizationOf(new RebillingCommand(
         gatewayId: GatewayId::generate(),
-        instrument: nuveiTestPaymentMethod(),
+        instrument: nuveiTestAttachedPaymentMethod(),
         amount: new Money(5000, new Currency('USD')),
         initiation: $initiation,
         genesisReference: $anchor,
@@ -155,7 +155,7 @@ it('sends no rebilling block on a payment outside any series', function () {
     // put an anchor at all.
     $data = nuveiAuthorizationOf(new PlacementCommand(
         gatewayId: GatewayId::generate(),
-        instrument: nuveiTestPaymentMethod(),
+        instrument: nuveiTestAttachedPaymentMethod(),
         amount: new Money(5000, new Currency('USD')),
         initiation: PaymentInitiation::CardholderInitiated,
     ))->payload();

@@ -7,6 +7,7 @@ namespace Techork\PaymentService\Nuvei\Webhook;
 use DateMalformedStringException;
 use Techork\PaymentService\Common\ShreddingStubs;
 use Techork\PaymentService\Common\ValueObject\BillingAddress;
+use Techork\PaymentService\Common\ValueObject\CustomerIdentity;
 use Techork\PaymentService\Common\ValueObject\CardBrand;
 use Techork\PaymentService\Common\ValueObject\Country;
 use Techork\PaymentService\Common\ValueObject\CreditCard;
@@ -91,21 +92,37 @@ final readonly class PayloadParser
         $city = (string) ($payload['city'] ?? '');
         $country = (string) ($payload['country'] ?? '');
         $postalCode = (string) ($payload['zip'] ?? '');
-
         $state = (string) ($payload['state'] ?? '');
-        $email = (string) ($payload['email'] ?? '');
-        $firstName = (string) ($payload['firstName'] ?? '');
-        $lastName = (string) ($payload['lastName'] ?? '');
 
         return new BillingAddress(
-            firstName: $firstName !== '' ? $firstName : ShreddingStubs::NAME,
-            lastName: $lastName !== '' ? $lastName : ShreddingStubs::NAME,
             line: $line !== '' ? $line : ShreddingStubs::ADDRESS_LINE,
             city: $city !== '' ? $city : ShreddingStubs::CITY,
             country: new Country($country !== '' ? $country : ShreddingStubs::COUNTRY),
             postalCode: $postalCode !== '' ? $postalCode : ShreddingStubs::POSTAL_CODE,
             lineExtra: '',
             state: $state !== '' ? new State($state) : null,
+        );
+    }
+
+    /**
+     * The person Nuvei's billing block names, which is the other half of what
+     * {@see billingAddress()} used to return on its own.
+     *
+     * Same stub treatment and for the same reason: a name Nuvei did not send is recorded as "no
+     * data" rather than left out, so a consumer reads one shape whether the field was never
+     * given or has since been erased.
+     *
+     * @param  array<string, mixed>  $payload
+     */
+    public static function customerIdentity(array $payload): CustomerIdentity
+    {
+        $firstName = (string) ($payload['firstName'] ?? '');
+        $lastName = (string) ($payload['lastName'] ?? '');
+        $email = (string) ($payload['email'] ?? '');
+
+        return new CustomerIdentity(
+            firstName: $firstName !== '' ? $firstName : ShreddingStubs::NAME,
+            lastName: $lastName !== '' ? $lastName : ShreddingStubs::NAME,
             email: $email !== '' ? new Email($email) : null,
         );
     }
