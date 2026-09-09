@@ -21,7 +21,6 @@ use Techork\PaymentService\Common\ValueObject\CreditCard\Expiration;
 use Techork\PaymentService\Common\ValueObject\CreditCard\Holder;
 use Techork\PaymentService\Common\ValueObject\CreditCard\Number;
 use Techork\PaymentService\Common\ValueObject\ExpiresAt;
-use Techork\PaymentService\Common\ValueObject\AttachedPaymentMethod;
 use Techork\PaymentService\Common\ValueObject\PaymentMethod;
 use Techork\PaymentService\Common\ValueObject\PaymentMethodId;
 use Techork\PaymentService\Common\ValueObject\Token;
@@ -295,15 +294,17 @@ function nuveiTestPaymentMethod(): PaymentMethod
 }
 
 /**
- * The same stored card with a customer attached — the only form a gateway will take a payment
- * on.
+ * The same stored card with a customer attached — the state a payment operation requires.
  *
- * A bare `PaymentMethod` is refused by every payment operation now, so the two fixtures are
- * both needed: this one for the payments, the bare one for the tests that assert the refusal.
+ * Both fixtures are needed: this one for the payments, nuveiTestPaymentMethod() for the tests that
+ * assert the refusal. Attached is a state rather than a type, so the difference between
+ * them is one constructor argument.
  */
-function nuveiTestAttachedPaymentMethod(): AttachedPaymentMethod
+function nuveiTestAttachedPaymentMethod(): PaymentMethod
 {
-    return new AttachedPaymentMethod(nuveiSuiteCustomer(), nuveiTestPaymentMethod());
+    $bare = nuveiTestPaymentMethod();
+
+    return new PaymentMethod($bare->id, $bare->instrument, nuveiSuiteCustomer());
 }
 
 /**

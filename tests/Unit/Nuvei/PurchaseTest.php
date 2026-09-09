@@ -302,3 +302,26 @@ it('sends the sale to payment.do and maps what came back', function () {
         ->and($result->success)->toBeTrue()
         ->and($result->reference)->toBe('txn-sale');
 });
+// ─────────────────────────────────────────────────────────
+//  A stored card charged to nobody
+//
+//  Attached is a STATE of a payment method rather than a second type, so "payable" is no longer
+//  something a signature carries — each payment mapper checks it. That is the trade the shape
+//  made, and this is its price: the refusal is asserted at every operation that makes it, because
+//  a check one mapper forgets is a card charged to whoever it happened to be billed to, which is
+//  the behaviour the customer split exists to end.
+// ─────────────────────────────────────────────────────────
+
+it('refuses to charge a stored card nobody has claimed', function () {
+    expect(fn () => nuveiPurchaseOf(nuveiTestPaymentMethod())->payload())
+        ->toThrow(UnsupportedInstrument::class, 'names no customer on the "payment" operation');
+});
+
+/**
+ * The positive control, so the refusal above cannot pass vacuously: the same card, claimed, gets
+ * through the guard and reaches the reference lookup.
+ */
+it('charges the same card once it is claimed', function () {
+    expect(nuveiPurchaseOf(nuveiTestAttachedPaymentMethod(), ['reference' => 'upo_12345'])->payload()['paymentOption'])
+        ->toBe(['userPaymentOptionId' => 'upo_12345']);
+});

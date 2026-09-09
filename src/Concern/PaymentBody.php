@@ -12,7 +12,6 @@ use Techork\PaymentService\Common\ValueObject\Cash;
 use Techork\PaymentService\Common\ValueObject\CreditCard;
 use Techork\PaymentService\Common\ValueObject\HostedPayment;
 use Techork\PaymentService\Common\ValueObject\PaymentInitiation;
-use Techork\PaymentService\Common\ValueObject\AttachedPaymentMethod;
 use Techork\PaymentService\Common\ValueObject\PaymentMethod;
 use Techork\PaymentService\Common\ValueObject\Token;
 use Techork\PaymentService\Gateway\Command\PlacementCommand;
@@ -180,27 +179,25 @@ final readonly class PaymentBody implements PaymentInstrumentVisitor
     }
 
     /**
-     * Refused: a stored card is charged to somebody, and a bare payment method names nobody.
+     * Refused when nobody has claimed the card, and that is the whole reason this is one
+     * method rather than two.
      *
-     * What this used to do is now {@see visitAttachedPaymentMethod()}, unchanged apart from
-     * reaching the instrument through the customer that holds it. The refusal is the change:
-     * the payer used to come off the address the payment method carried, so a card was charged
-     * to whoever it happened to be billed to.
+     * There was a `visitAttachedPaymentMethod()` beside a `visitPaymentMethod()` that only
+     * threw, which made "payable" something a signature carried. Attached is a state of a
+     * payment method — see {@see PaymentMethod::isAttached()} — so the branch became a guard.
+     * What it costs is that the guarantee is now checked rather than typed; what it buys is
+     * one credential with one identity everywhere downstream of here.
      */
     #[Override]
-    public function visitPaymentMethod(PaymentMethod $paymentMethod): never
+    public function visitPaymentMethod(PaymentMethod $paymentMethod): array
     {
-        throw UnsupportedInstrument::needsAttachedCustomer('nuvei', 'payment', $paymentMethod);
-    }
+        // A stored card is charged to somebody, and an unattached one names nobody. The
+        // payer is not derivable from the card: what used to answer was the address the
+        // payment method carried, so a card was charged to whoever it was billed to.
+        $paymentMethod->isAttached() || throw UnsupportedInstrument::needsAttachedCustomer('nuvei', 'payment', $paymentMethod);
 
-    /**
-     * @return array{userPaymentOptionId: string}
-     */
-    #[Override]
-    public function visitAttachedPaymentMethod(AttachedPaymentMethod $attached): array
-    {
-        $reference = $this->infrastructure->instruments->find($this->infrastructure->credential->getId(), $attached->paymentMethod)
-            ?? throw new RuntimeException("No Nuvei reference found for payment method {$attached->paymentMethod->id}.");
+        $reference = $this->infrastructure->instruments->find($this->infrastructure->credential->getId(), $paymentMethod)
+            ?? throw new RuntimeException("No Nuvei reference found for payment method {$paymentMethod->id}.");
 
         // No storedCredentials. Their REST 1.0 reference is explicit that merchants
         // "using Nuvei's tokenization feature should not send this parameter", and we

@@ -19,7 +19,6 @@ use Techork\PaymentService\Common\ValueObject\TokenId;
 use Techork\PaymentService\Gateway\Command\RefundCommand;
 use Techork\PaymentService\Gateway\ValueObject\GatewayId;
 use Techork\PaymentService\Nuvei\Payout;
-use Techork\PaymentService\Common\ValueObject\AttachedPaymentMethod;
 use Techork\PaymentService\Gateway\Exception\UnsupportedInstrument;
 
 /**
@@ -62,7 +61,7 @@ it('builds payout data for a Token via userPaymentOptionId', function () {
 });
 
 it('builds payout data for an attached PaymentMethod via userPaymentOptionId', function () {
-    $attached = new AttachedPaymentMethod(nuveiSuiteCustomer(), new PaymentMethod(
+    $attached = new PaymentMethod(
         PaymentMethodId::fromString('01961f5a-0000-7000-8000-000000000201'),
         new CreditCard(
             new Number('424242', '4242', CardBrand::Visa),
@@ -70,7 +69,8 @@ it('builds payout data for an attached PaymentMethod via userPaymentOptionId', f
             new Holder('Alt Holder'),
             new Cvc,
         ),
-    ));
+        nuveiSuiteCustomer(),
+    );
 
     expect(nuveiPayout($attached, ['reference' => 'nuvei-upo-99'])->payload()['userPaymentOption'])
         ->toBe(['userPaymentOptionId' => 'nuvei-upo-99']);
