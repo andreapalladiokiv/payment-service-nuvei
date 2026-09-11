@@ -71,8 +71,13 @@ final readonly class NuveiTransactionOutcome
             return (string) $this->data['gwErrorReason'];
         }
 
-        return isset($this->data['errCode']) && $this->data['errCode'] !== '0'
-            ? "Error code: {$this->data['errCode']}"
+        // `(int)` casts, as {@see \Techork\PaymentService\Nuvei\Tokenize} learned the hard way:
+        // Nuvei sends the code unquoted, so this used to compare it to `'0'` as a string and
+        // report an int 0 — Nuvei's marker for NO error — as an error.
+        $code = $this->data['errCode'] ?? null;
+
+        return $code !== null && (int) $code !== 0
+            ? "Error code: {$code}"
             : null;
     }
 

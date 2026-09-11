@@ -25,6 +25,17 @@ it('returns null when required card fields are missing', function () {
     expect(PayloadParser::creditCard(['last4Digits' => '4242']))->toBeNull();
 });
 
+it('returns null rather than throwing when the expiry is an unreadable date', function () {
+    // A malformed DMN must not kill the handler — it already knows the card fields
+    // it could not parse come back null.
+    expect(PayloadParser::creditCard([
+        'last4Digits' => '4242',
+        'cardCompany' => 'Visa',
+        'ccExpMonth' => '13',
+        'ccExpYear' => '2030',
+    ]))->toBeNull();
+});
+
 it('parses a billing address', function () {
     $address = PayloadParser::billingAddress([
         'firstName' => 'Jane',
@@ -52,6 +63,14 @@ it('fills shredding stubs when required address fields are missing', function ()
         ->and($address->postalCode)->toBe(ShreddingStubs::POSTAL_CODE);
 });
 
+it('records an unresolvable country as no data rather than throwing', function () {
+    // `ZZZ` is a well-formed alpha-3 Symfony Intl cannot resolve; the row must
+    // survive with the same "no data" marker an absent country gets.
+    $address = PayloadParser::billingAddress(['country' => 'ZZZ']);
+
+    expect((string) $address->country)->toBe(ShreddingStubs::COUNTRY);
+});
+
 /**
  * The payer Nuvei's billing block names, read separately from the place.
  *
@@ -76,4 +95,15 @@ it('parses the payer separately, with stubs for what Nuvei did not send', functi
     expect($unnamed->firstName)->toBe(ShreddingStubs::NAME)
         ->and($unnamed->lastName)->toBe(ShreddingStubs::NAME)
         ->and($unnamed->email)->toBeNull();
+});
+
+it('reads a malformed email as no email rather than throwing', function () {
+    $identity = PayloadParser::customerIdentity([
+        'firstName' => 'Jane',
+        'lastName' => 'Doe',
+        'email' => 'not-an-email',
+    ]);
+
+    expect($identity->firstName)->toBe('Jane')
+        ->and($identity->email)->toBeNull();
 });

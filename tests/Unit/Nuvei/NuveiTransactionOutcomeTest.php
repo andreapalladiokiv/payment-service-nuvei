@@ -185,6 +185,9 @@ it('prefers the reason, then the gateway reason, then the error code', function 
         ->and(makeNuveiOutcome(['errCode' => '5'])->message())->toBe('Error code: 5')
         // '0' is Nuvei's marker for no error, so there is nothing to report.
         ->and(makeNuveiOutcome(['errCode' => '0'])->message())->toBeNull()
+        // Nuvei sends the code unquoted: an int 0 must read the same as the string it mirrors,
+        // not as an error. (Tokenize hit this live.)
+        ->and(makeNuveiOutcome(['errCode' => 0])->message())->toBeNull()
         ->and(makeNuveiOutcome([])->message())->toBeNull();
 });
 
