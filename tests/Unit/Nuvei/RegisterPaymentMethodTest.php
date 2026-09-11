@@ -135,39 +135,25 @@ it('registers a raw card as a zero-amount Auth marking the credential newly stor
         Cvc::fromCvc('123', new EncryptsToItself),
     );
 
-    // This is a LIVE DEFECT, not a quirk of the test setup, and not something the migration
-    // introduced — it is carried over from the request class unchanged.
-    //
-    // `payment.do` marks `deviceDetails` mandatory and the SDK fills it from
-    // $_SERVER['REMOTE_ADDR'], which exists under a web request and NOT under CLI. This operation
-    // sends none of its own (a payment does; see Concern\PaymentBody), so registering a raw card
-    // from a queue worker never leaves the process and fails on "Missing input parameters:
-    // deviceDetails". REMOTE_ADDR is set here only so the rest of the body can be asserted at all;
-    // remove these three lines and the call below records nothing, which is exactly the bug.
-    $previousRemoteAddress = $_SERVER['REMOTE_ADDR'] ?? null;
-    $_SERVER['REMOTE_ADDR'] = '127.0.0.1';
-
-    try {
-        nuveiUpo($card, [
-            'restClient' => nuveiSuiteRecordingClient($calls, [
-                'status' => 'SUCCESS',
-                'transactionStatus' => 'APPROVED',
-                'paymentOption' => ['userPaymentOptionId' => '9001'],
-            ]),
-        ])->register();
-    } finally {
-        if ($previousRemoteAddress === null) {
-            unset($_SERVER['REMOTE_ADDR']);
-        } else {
-            $_SERVER['REMOTE_ADDR'] = $previousRemoteAddress;
-        }
-    }
+    // `deviceDetails` is mandatory on payment.do and the SDK fills it from
+    // $_SERVER['REMOTE_ADDR'], which exists under a web request and NOT under CLI. The operation
+    // sends the loopback explicitly now (see RegisterPaymentMethod::verifyCard), which is why this
+    // test runs without staging REMOTE_ADDR — the exact setup under which the call used to record
+    // nothing at all.
+    nuveiUpo($card, [
+        'restClient' => nuveiSuiteRecordingClient($calls, [
+            'status' => 'SUCCESS',
+            'transactionStatus' => 'APPROVED',
+            'paymentOption' => ['userPaymentOptionId' => '9001'],
+        ]),
+    ])->register();
 
     expect($calls)->toHaveCount(1)
         ->and($calls[0]['url'])->toBe('https://ppp-test.safecharge.com/ppp/api/v1/payment.do')
         ->and($calls[0]['params']['transactionType'])->toBe('Auth')
         ->and($calls[0]['params']['amount'])->toBe('0')
         ->and($calls[0]['params']['currency'])->toBe('USD')
+        ->and($calls[0]['params']['deviceDetails'])->toBe(['ipAddress' => '127.0.0.1'])
         ->and($calls[0]['params']['paymentOption']['card']['storedCredentials'])
         ->toBe(['storedCredentialsMode' => '0']);
 });

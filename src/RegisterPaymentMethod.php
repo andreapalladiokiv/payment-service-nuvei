@@ -165,13 +165,10 @@ final readonly class RegisterPaymentMethod implements PaymentInstrumentVisitor
     /**
      * Registers the card by asking the issuer to verify it for zero.
      *
-     * LIVE DEFECT, carried over unchanged and not introduced here: this body sends no
-     * `deviceDetails`, which `payment.do` marks mandatory. The SDK's `appendIpAddress()` fills it
-     * from `$_SERVER['REMOTE_ADDR']`, which exists under a web request and NOT under CLI — so
-     * registering a raw card from a queue worker never leaves the process and fails with
-     * "Missing input parameters: deviceDetails". A payment does not have this problem;
-     * {@see Concern\PaymentBody} sends the loopback address explicitly. Fixing it means adding a
-     * field to the request, which is a behaviour change and belongs in its own commit.
+     * `deviceDetails` is sent explicitly, as {@see Concern\PaymentBody} sends it: the SDK's
+     * `appendIpAddress()` fills the mandatory field from `$_SERVER['REMOTE_ADDR']`, which exists
+     * under a web request and NOT under CLI — a registration left to the SDK failed off-web with
+     * "Missing input parameters: deviceDetails", so a queue worker could never vault a card.
      *
      * `storedCredentialsMode: '0'` belongs here and only here — this is the moment a
      * credential is stored, which is what the parameter describes: Nuvei's REST 1.0
@@ -207,6 +204,7 @@ final readonly class RegisterPaymentMethod implements PaymentInstrumentVisitor
             'currency' => self::VERIFICATION_CURRENCY,
             'transactionType' => 'Auth',
             'paymentOption' => ['card' => $card],
+            'deviceDetails' => ['ipAddress' => '127.0.0.1'],
             'billingAddress' => $this->formatBillingAddress($this->command->customer),
         ]);
     }
