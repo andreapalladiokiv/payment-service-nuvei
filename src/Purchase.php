@@ -109,19 +109,19 @@ final readonly class Purchase
 
         $totalAmount = $this->formatMoney($money);
         $currency = $money->getCurrency()->getCode();
-        $timeStamp = new DateTimeImmutable()->format('YmdHis');
+
+        // The documented format for `time_stamp` is `YYYY-MM-DD.HH:MM:SS` (GMT, 24h) — the
+        // compact `YmdHis` the REST API takes is refused by Cashier's checksum check.
+        $timeStamp = new DateTimeImmutable()->format('Y-m-d.H:i:s');
 
         $clientUniqueId = $this->command->clientUniqueId ?? Uuid::uuid4()->toString();
 
-        $checksum = hash('sha256', implode('', [
-            $this->settings->merchantId,
-            $this->settings->merchantSiteId,
-            $totalAmount,
-            $currency,
-            $timeStamp,
-            $this->settings->secretKey,
-        ]));
-
+        // Cashier's checksum rule (docs.nuvei.com, "Quick start for Payment Page", purchase.do
+        // 4.0.0): SHA-256 over the secret key CONCATENATED FIRST, then the values of ALL the
+        // input parameters in the exact order they are sent in the request. So the field array
+        // is built complete — user_token_id included, since it rides in the same POST — and the
+        // checksum is the only field appended afterwards. The earlier version here signed five
+        // chosen fields, secret last, which Cashier refuses as an invalid checksum.
         $formFields = [
             'merchant_id' => $this->settings->merchantId,
             'merchant_site_id' => $this->settings->merchantSiteId,
@@ -137,12 +137,13 @@ final readonly class Purchase
             'pending_url' => $hosted->successUrl,
             'back_url' => $hosted->cancelUrl,
             'clientUniqueId' => $clientUniqueId,
-            'checksum' => $checksum,
         ];
 
         if ($this->customerReference !== '') {
             $formFields['user_token_id'] = $this->customerReference;
         }
+
+        $formFields['checksum'] = hash('sha256', $this->settings->secretKey.implode('', array_values($formFields)));
 
         return [
             'cashier_url' => $this->settings->environment === Environment::LIVE

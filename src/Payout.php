@@ -77,23 +77,32 @@ final readonly class Payout implements PaymentInstrumentVisitor
 
         $money = $this->command->amount;
 
-        // Two ids rather than the one a payment uses: `payout.do` signs clientRequestId and
-        // clientUniqueId separately in its checksum, and the pre-bridge integration sent them
-        // independent. Left as it was, because changing what a checksum covers is not a cleanup.
+        // Two ids rather than the one a payment uses, and they stay independent as the pre-bridge
+        // integration sent them: the clientRequestId is the idempotency key Nuvei sees, the
+        // clientUniqueId is what correlates the payout with the refund that opened it. Neither
+        // enters the checksum — see {@see payout()}.
         $clientUniqueId = $this->command->clientUniqueId ?? Uuid::uuid4()->toString();
         $clientRequestId = Uuid::uuid4()->toString();
 
-        return [
+        $data = [
             'clientRequestId' => $clientRequestId,
             'clientUniqueId' => $clientUniqueId,
             'amount' => $this->formatMoney($money),
             'currency' => $money->getCurrency()->getCode(),
-            'userTokenId' => $this->customerReference,
             'userPaymentOption' => $paymentOption,
             // As on a payment: nothing upstream carries the buyer's address, so the loopback
             // stands in for a field Nuvei requires.
             'deviceDetails' => ['ipAddress' => '127.0.0.1'],
         ];
+
+        // Omit, don't send '' — same rule as {@see \Techork\PaymentService\Nuvei\Concern\PaymentBody}.
+        // It IS a mandatory field on payout.do per the vendor SDK, so a payout without one would
+        // be refused anyway; sending an empty string just gets it refused more confusingly.
+        if ($this->customerReference !== '') {
+            $data['userTokenId'] = $this->customerReference;
+        }
+
+        return $data;
     }
 
     #[Override]
@@ -171,16 +180,21 @@ final readonly class Payout implements PaymentInstrumentVisitor
             $data['merchantSiteId'] = $config->getMerchantSiteId();
             $data['timeStamp'] = new DateTimeImmutable()->format('YmdHis');
 
+            // The composition is the vendor SDK's, verbatim
+            // (vendor/nuvei/nuvei-server-php `Payout::payout()`, checksumParametersOrder): merchant
+            // identity, clientRequestId, amount, currency, timestamp — and NOT clientUniqueId or
+            // userTokenId. A checksum that covers more than the SDK signs is refused as invalid,
+            // and this composition is the one the SDK's own live sandbox test
+            // (vendor/nuvei/nuvei-server-php tests/PayoutTest.php) drives SUCCESS with. The
+            // earlier list here added both fields, from an unverified pre-bridge comment.
             $data['checksum'] = Utils::calculateChecksum(
                 $data,
                 [
                     'merchantId',
                     'merchantSiteId',
                     'clientRequestId',
-                    'clientUniqueId',
                     'amount',
                     'currency',
-                    'userTokenId',
                     'timeStamp',
                     'merchantSecretKey',
                 ],

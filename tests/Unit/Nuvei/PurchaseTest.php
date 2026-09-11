@@ -237,10 +237,56 @@ it('builds hosted Cashier form data for HostedPayment instrument', function () {
         ->and($form['back_url'])->toBe('https://merchant.example/cancel')
         ->and($form['clientUniqueId'])->toBe($piId)
         ->and($form)->toHaveKey('checksum')
-        ->and($form)->toHaveKey('time_stamp');
+        ->and($form)->toHaveKey('time_stamp')
+        // Cashier's documented format: YYYY-MM-DD.HH:MM:SS — not the compact one the REST API takes.
+        ->and($form['time_stamp'])->toMatch('/^\d{4}-\d{2}-\d{2}\.\d{2}:\d{2}:\d{2}$/');
 
+    // Secret FIRST, then the values of every field the form carries, in the order they are
+    // sent (docs.nuvei.com, "Quick start for Payment Page"). Spelled out field by field rather
+    // than recomputed from the form array, so a field added to (or dropped from) the signature
+    // without changing the form — or the other way round — breaks this test.
     $expectedChecksum = hash('sha256', implode('', [
-        'mid_123', 'sid_456', '10.50', 'USD', $form['time_stamp'], 'sek_789',
+        'sek_789',
+        'mid_123', 'sid_456', '10.50', 'USD', $form['time_stamp'], '4.0.0',
+        'Payment', '10.50', '1',
+        'https://merchant.example/success', 'https://merchant.example/cancel',
+        'https://merchant.example/success', 'https://merchant.example/cancel',
+        $piId,
+    ]));
+    expect($form['checksum'])->toBe($expectedChecksum);
+});
+
+/**
+ * A stored-customer hosted payment POSTs user_token_id in the same form, so it rides inside the
+ * signed string too — the one case where "all the parameters in the order they are sent" grows
+ * past the always-present fields.
+ */
+it('signs user_token_id into the Cashier checksum when a customer is resolved', function () {
+    $piId = '550e8400-e29b-41d4-a716-446655440000';
+
+    $form = nuveiPurchaseOf(
+        new HostedPayment('https://m/s', 'https://m/c'),
+        [
+            'money' => new Money(1050, new Currency('USD')),
+            'merchantId' => 'mid_123',
+            'merchantSiteId' => 'sid_456',
+            'secretKey' => 'sek_789',
+            'environment' => 'int',
+            'clientUniqueId' => $piId,
+            'customerReference' => 'user-42',
+        ],
+    )->payload()['form_fields'];
+
+    expect($form['user_token_id'])->toBe('user-42');
+
+    // user_token_id was appended after clientUniqueId, so that is where it sits in the signed
+    // string — right before the checksum, which is itself the only field excluded.
+    $expectedChecksum = hash('sha256', implode('', [
+        'sek_789',
+        'mid_123', 'sid_456', '10.50', 'USD', $form['time_stamp'], '4.0.0',
+        'Payment', '10.50', '1',
+        'https://m/s', 'https://m/c', 'https://m/s', 'https://m/c',
+        $piId, 'user-42',
     ]));
     expect($form['checksum'])->toBe($expectedChecksum);
 });

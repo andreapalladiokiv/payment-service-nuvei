@@ -150,4 +150,35 @@ it('signs the payout and posts it to payout.do', function () {
         // A payout opens nothing — it is the tail of a refund, not a placement — so it records no
         // opening reference to bury the original sale's under.
         ->and($result->metadata)->toBe([]);
+
+    // The composition the vendor SDK's own Payout service signs (and its live sandbox test drives
+    // SUCCESS with): clientUniqueId and userTokenId ride in the BODY but are NOT part of the
+    // checksum — a checksum covering fields the other side doesn't sign is refused as invalid.
+    $p = $calls[0]['params'];
+    $expectedChecksum = hash('sha256', implode('', [
+        $p['merchantId'], $p['merchantSiteId'], $p['clientRequestId'],
+        $p['amount'], $p['currency'], $p['timeStamp'],
+        'secret-suite',
+    ]));
+    expect($p['checksum'])->toBe($expectedChecksum);
+});
+
+/**
+ * Same rule as a payment body: Nuvei refuses an EMPTY userTokenId outright, while userTokenId is
+ * a mandatory field on payout.do — so the field exists only when there is something to name.
+ */
+it('omits userTokenId from the payout body when nobody was resolved', function () {
+    $token = new Token(
+        TokenId::fromString('01961f5a-0000-7000-8000-000000000200'),
+        new CreditCard(
+            new Number('424242', '4242', CardBrand::Visa),
+            Expiration::fromMonthAndYear(12, 2030),
+            new Holder('Alt Holder'),
+            new Cvc,
+        ),
+        ExpiresAt::fromDateTime(new DateTimeImmutable('+1 hour')),
+    );
+
+    expect(nuveiPayout($token, ['reference' => 'nuvei-upo-77', 'customerReference' => ''])->payload())
+        ->not->toHaveKey('userTokenId');
 });
