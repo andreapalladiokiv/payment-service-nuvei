@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use GuzzleHttp\Psr7\ServerRequest;
 use Psr\Log\LoggerInterface;
+use Techork\PaymentService\Common\ValueObject\CardBrand;
 use Techork\PaymentService\Gateway\Contract\GatewayCredential;
 use Techork\PaymentService\Gateway\Contract\GatewayCredentialRepository;
 use Techork\PaymentService\Gateway\ValueObject\GatewayId;
@@ -13,8 +14,10 @@ use Techork\PaymentService\Gateway\Webhook\Contract\TransactionIdResolver;
 use Techork\PaymentService\Gateway\Webhook\HandlerRegistry;
 use Techork\PaymentService\Gateway\Webhook\Recorder\GatewayAuthorizationRecorder;
 use Techork\PaymentService\Gateway\Webhook\Recorder\GatewayCancellationRecorder;
+use Techork\PaymentService\Gateway\Webhook\Recorder\GatewayDisputeRecorder;
 use Techork\PaymentService\Gateway\Webhook\Recorder\GatewayFailureRecorder;
 use Techork\PaymentService\Gateway\Webhook\Recorder\GatewayFeeRecorder;
+use Techork\PaymentService\Gateway\Webhook\Recorder\DisputeSnapshot;
 use Techork\PaymentService\Gateway\Webhook\Recorder\GatewayPaymentMethodRecorder;
 use Techork\PaymentService\Gateway\Webhook\Recorder\GatewaySuccessRecorder;
 use Techork\PaymentService\Gateway\Webhook\Recorder\RecorderOutcome;
@@ -26,6 +29,7 @@ use Techork\PaymentService\Nuvei\NuveiGateway;
 use Techork\PaymentService\Nuvei\Webhook\ChecksumVerifier;
 use Techork\PaymentService\Nuvei\Webhook\EventParser;
 use Techork\PaymentService\Nuvei\Webhook\Handler\AuthHandler;
+use Techork\PaymentService\Nuvei\Webhook\Handler\ChargebackHandler;
 use Techork\PaymentService\Nuvei\Webhook\Handler\CreditHandler;
 use Techork\PaymentService\Nuvei\Webhook\Handler\PaymentMethodCreationHandler;
 use Techork\PaymentService\Nuvei\Webhook\Handler\SaleHandler;
@@ -134,14 +138,60 @@ function nuveiWiringRequest(array $payload, string $checksum): ServerRequest
 }
 
 /**
+ * A Chargeback delivery — the event channel, in the shape the parser now distinguishes from a payment
+ * DMN: the envelope's `EventType` and **no** `transactionType`.
+ *
+ * Minimal rather than the documented field list in full, which is the handler's own test's job. This
+ * one is about the wiring: that a stored delivery of this shape reaches the handler written for it and
+ * comes out as a fact on the recorder.
+ */
+function nuveiWiringChargebackPayload(): array
+{
+    return [
+        'EventId' => '1000000001',
+        'EventDateUTC' => '2026-08-04 11:22:33',
+        'EventType' => 'Chargeback',
+        'Chargeback' => [
+            'Type' => 'Chargeback',
+            'DisputeId' => 'dc_1000000001',
+            'DisputeEventId' => 'dce_1000000001',
+            'DisputeUnifiedStatusCode' => 'FC',
+            'ChargebackReason' => '10.4 - Other Fraud-Card Absent Environment',
+            'Amount' => '25.00',
+            'Currency' => 'USD',
+            'DisputeDueDate' => '2026-08-20',
+        ],
+        'TransactionDetails' => [
+            'TransactionId' => '1110000000123456',
+            'ClientUniqueId' => '01929fa5-0000-7000-8000-000000000009',
+        ],
+    ];
+}
+
+/** The dispute recorder, stubbed, keeping whatever it was handed for the assertions. */
+function nuveiWiringDisputeRecorder(?DisputeSnapshot &$captured): GatewayDisputeRecorder
+{
+    $recorder = Mockery::mock(GatewayDisputeRecorder::class);
+    $recorder->shouldReceive('onDisputeObserved')->once()
+        ->andReturnUsing(function ($gatewayId, $paymentIntentId, DisputeSnapshot $snapshot) use (&$captured): RecorderOutcome {
+            $captured = $snapshot;
+
+            return RecorderOutcome::Applied;
+        });
+
+    return $recorder;
+}
+
+/**
  * The subscriber with every handler real and only the persistence boundary
- * mocked. Constructing all six is itself part of what is pinned — the subscriber
+ * mocked. Constructing all seven is itself part of what is pinned — the subscriber
  * declares them by concrete type, so a handler whose constructor changed shape
  * would fail here.
  */
 function nuveiWiringSubscriber(
     ?TransactionIdResolver $resolver = null,
     ?GatewayCancellationRecorder $cancellation = null,
+    ?GatewayDisputeRecorder $dispute = null,
 ): NuveiWebhookSubscriber {
     return new NuveiWebhookSubscriber(
         new ChecksumVerifier,
@@ -170,6 +220,12 @@ function nuveiWiringSubscriber(
         new VoidHandler(
             $resolver ?? Mockery::mock(TransactionIdResolver::class),
             $cancellation ?? Mockery::mock(GatewayCancellationRecorder::class),
+        ),
+        // The same resolver instance the void handler gets, which is what the container does: it is one
+        // binding, and a second mock here would hide a handler reaching for the wrong dependency.
+        new ChargebackHandler(
+            $resolver ?? Mockery::mock(TransactionIdResolver::class),
+            $dispute ?? Mockery::mock(GatewayDisputeRecorder::class),
         ),
     );
 }
@@ -219,12 +275,14 @@ it('registers the verifier and parser under the kind the gateway reports', funct
         ->and($verifiers->parser($kind))->toBeInstanceOf(EventParser::class);
 });
 
-it('points each DMN transaction type at the handler written for it', function (string $eventType, string $handlerClass) {
+it('points each DMN event type at the handler written for it', function (string $eventType, string $handlerClass) {
     // The keys are the parser's own constants, so the two halves cannot drift
     // apart silently — a renamed constant fails to compile this test rather than
     // quietly registering a type nothing emits. Auth is the interesting pair:
     // a zero-amount Auth is Nuvei's tokenization flow and must reach the
-    // payment-method handler, not the authorization one.
+    // payment-method handler, not the authorization one. The chargeback is the
+    // one row here that is an *event* DMN's `EventType` rather than a payment
+    // DMN's `transactionType` — the two channels the parser distinguishes.
     [, $handlers] = nuveiWiringRegistries();
 
     expect($handlers->resolve('nuvei', $eventType))->toBeInstanceOf($handlerClass);
@@ -235,6 +293,7 @@ it('points each DMN transaction type at the handler written for it', function (s
     'settle' => [EventParser::TYPE_SETTLE, SettleHandler::class],
     'credit' => [EventParser::TYPE_CREDIT, CreditHandler::class],
     'void' => [EventParser::TYPE_VOID, VoidHandler::class],
+    'chargeback' => [EventParser::TYPE_CHARGEBACK, ChargebackHandler::class],
 ]);
 
 it('registers no handler for a transaction type we do not act on', function (string $eventType) {
@@ -242,11 +301,17 @@ it('registers no handler for a transaction type we do not act on', function (str
     // router reports Skipped, rather than being retried forever or run through a
     // handler meant for something else. The empty string is included because it
     // is what the parser emits for a DMN with no transactionType at all.
+    //
+    // This row used to be `Chargeback`, which was this service's example of a
+    // type it deliberately did not act on; the chargeback now has a handler, so
+    // the example moves to a spelling no Nuvei delivery carries — the parser
+    // uses it as an id prefix, never as a type. That is a stronger statement
+    // than the old row made: the registry's null is a genuine absence rather
+    // than a list of known types it happens not to contain.
     [, $handlers] = nuveiWiringRegistries();
 
     expect($handlers->resolve('nuvei', $eventType))->toBeNull();
 })->with([
-    'chargeback' => 'Chargeback',
     'unknown' => 'Unknown',
     'no transaction type' => '',
 ]);
@@ -344,6 +409,7 @@ it('routes a zero-amount Auth to tokenization rather than to authorization', fun
             Mockery::mock(GatewayFeeRecorder::class),
         ),
         new VoidHandler(Mockery::mock(TransactionIdResolver::class), Mockery::mock(GatewayCancellationRecorder::class)),
+        new ChargebackHandler(Mockery::mock(TransactionIdResolver::class), Mockery::mock(GatewayDisputeRecorder::class)),
     );
 
     [$verifiers, $handlers] = nuveiWiringRegistries($subscriber);
@@ -380,6 +446,53 @@ it('skips a stored DMN whose transaction type has no registered handler', functi
     expect($router->dispatch(new StoredWebhookCall(
         'nuvei',
         GatewayId::generate(),
-        nuveiWiringPayload('Chargeback'),
+        nuveiWiringPayload('Frobnicate'),
     )))->toBe(HandlerOutcome::Skipped);
+});
+
+it('dispatches a stored Chargeback DMN through the parser into the dispute recorder', function () {
+    // This delivery used to be this file's example of one the router *skips*. It is now the one the
+    // subscription exists for, so the pin is inverted: end to end over the real router, the real
+    // parser and the real handler, from a stored event-DMN payload to the snapshot a recorder is
+    // handed.
+    //
+    // It is here rather than only in the handler's own test because the half each of those cannot see
+    // is this one: the parser routing the *event* channel by `EventType`, the registry having a handler
+    // under that key, and the handler's DTO reading a payload the parser built rather than an array the
+    // test wrote. Every one of those is a seam between classes.
+    $paymentIntentId = '01929fa5-0000-7000-8000-000000000009';
+
+    $resolver = Mockery::mock(TransactionIdResolver::class);
+    $resolver->shouldReceive('resolvePaymentIntent')->once()->andReturn($paymentIntentId);
+
+    $recorder = nuveiWiringDisputeRecorder($captured);
+
+    [$verifiers, $handlers] = nuveiWiringRegistries(nuveiWiringSubscriber($resolver, null, $recorder));
+
+    $router = new WebhookRouter(
+        nuveiWiringRepository(nuveiWiringCredential(nuveiWiringSecret())),
+        $verifiers,
+        $handlers,
+    );
+
+    $outcome = $router->dispatch(new StoredWebhookCall(
+        'nuvei',
+        GatewayId::generate(),
+        nuveiWiringChargebackPayload(),
+    ));
+
+    expect($outcome)->toBe(HandlerOutcome::Processed)
+        ->and($captured)->toBeInstanceOf(DisputeSnapshot::class);
+
+    // The case as it arrived, with both the provider's own code and the two spellings the package
+    // owning Nuvei's vocabulary read out of it — which is the whole of what F4-notification can carry
+    // on classic API 1.0, where reading and answering a case are Control Panel work.
+    expect($captured?->gatewayDisputeRef)->toBe('dc_1000000001')
+        ->and($captured?->providerEventKey)->toBe('dce_1000000001')
+        ->and($captured?->reasonCode)->toBe('10.4')
+        ->and($captured?->cardBrand)->toBe(CardBrand::Visa)
+        ->and($captured?->stage)->toBe('chargeback')
+        ->and($captured?->status)->toBe('needs_response')
+        ->and($captured?->stageCode)->toBe('FC')
+        ->and($captured?->responseDueAt?->format('Y-m-d'))->toBe('2026-08-20');
 });

@@ -117,13 +117,21 @@ The outcome arrives asynchronously as a `Sale` DMN.
 `NuveiWebhookSubscriber` registers `ChecksumVerifier` + `EventParser` under
 kind `Nuvei`. `ChecksumVerifier` matches the payload's merchant pair against
 the credential (`merchant_id`, `site_id`, `secret_key` keys from
-`GatewayCredential::getCredentials()`) and validates both delivery shapes:
+`GatewayCredential::getCredentials()`) and validates all three delivery shapes:
 form-encoded **DMN** (`sha256(secret + totalAmount + currency +
-responseTimeStamp + PPP_TransactionID + Status + productId)` in the body) and
-JSON **Notification** (`EventCorrelationId` present, `sha256(secret + rawBody)`
-in the `checksum` header).
+responseTimeStamp + PPP_TransactionID + Status + productId)` in the body), JSON
+**Notification** (`EventCorrelationId` present, `sha256(secret + rawBody)` in the
+`checksum` header), and **event DMN** — a Control Panel event, which states no
+merchant pair at all (`EventType` present, `sha256(secret + the payload's values
+in the order they are sent)` in the `checksum` header). With no pair there is
+nothing to match, so the tenant is *the credential whose secret validates the
+header*: for that shape the checksum is the whole of the authentication.
 
-| DMN `transactionType` | Handler | Effect |
+`EventParser` tells the channels apart by `transactionType` (payment) versus
+`EventType` (event), and reads a delivery carrying both as the payment DMN it
+also is — so nothing that resolved before is routed anywhere new.
+
+| DMN type | Handler | Effect |
 | --- | --- | --- |
 | `Auth`, amount > 0 | `AuthHandler` | Records authorization / decline on the PaymentIntent; best-effort UPO → PaymentMethod upsert |
 | `Auth`, amount = 0 | `PaymentMethodCreationHandler` | Nuvei's tokenization flow — upserts a local PaymentMethod for the UPO |
@@ -131,6 +139,23 @@ in the `checksum` header).
 | `Settle` | `SettleHandler` | Confirms capture; forwards `feeAmount` to the fee recorder |
 | `Credit` | `CreditHandler` | Refund processed / failed (resolved via `relatedTransactionId`); forwards refund fee |
 | `Void` | `VoidHandler` | Cancels the linked PaymentIntent (resolved via `relatedTransactionId`) |
+| `EventType: Chargeback` | `ChargebackHandler` | Opens or moves a Dispute case, keyed on `Chargeback.DisputeEventId`; the payment is resolved by `TransactionDetails.ClientUniqueId`, falling back to `TransactionId` |
+
+Only `Chargeback` is registered on the event channel. `DisputeMapping` also
+knows the case kind `Retrieval`, but as a value of `Chargeback.Type` inside a
+delivery whose event type is still `Chargeback` — the stage is read from the
+unified status code, and `Type` answers only where the code yields no stage.
+Whether `Retrieval` is ever an `EventType` of its own is unconfirmed, so nothing
+is registered for it: an event DMN of an unregistered type is skipped rather
+than guessed at.
+
+A Chargeback states no card brand anywhere, and the dispute recorder requires
+one: the evidence requirements are keyed on the `(brand, code)` pair. So
+`ChargebackEvent` reads it off `Chargeback.ChargebackReason`'s namespace
+(`ReasonCodeNetwork`) and reduces the code at Nuvei's documented `" - "`
+separator. A code in no list of ours has no network to read, and the delivery is
+refused — a visible failed webhook one table entry from working, rather than a
+case filed against the nearest network's requirements.
 
 Correlation: operations send the caller's id as `clientUniqueId` — the
 PaymentIntent UUID for top-level ops, or `<uuid>:<verb>` for follow-ups

@@ -1,0 +1,34 @@
+{
+  "EventId": "1000000002",
+  "EventDate": "2026-08-14 08:41:02",
+  "EventType": "Chargeback",
+  "EventDateUTC": "2026-08-14 08:41:02",
+  "EventCorrelationId": "ec_1000000002",
+  "ProcessingEntityType": "Merchant",
+  "ProcessingEntityId": "mid-sample",
+  "Chargeback": {
+    "Date": "2026-08-03 09:00:00",
+    "Type": "Chargeback",
+    "ChargebackStatusCategory": "Regular",
+    "Amount": "25.00",
+    "Currency": "USD",
+    "ReportedAmount": "25.00",
+    "ReportedCurrency": "USD",
+    "ISOCurrency": "USD",
+    "ChargebackReason": "10.4 - Other Fraud-Card Absent Environment",
+    "ReasonMessage": "The cardholder states the transaction was not authorised.",
+    "ChargebackReasonCategory": "Fraud",
+    "DisputeDueDate": "2026-08-28",
+    "DisputeId": "dc_1000000001",
+    "DisputeEventId": "dce_1000000002",
+    "DisputeUnifiedStatusCode": "IPA"
+  },
+  "TransactionDetails": {
+    "TransactionId": "1110000000123456",
+    "TransactionDate": "2026-07-28 14:05:00",
+    "ClientUniqueId": "01929fa5-0000-7000-8000-0000000000a1",
+    "AcquirerName": "Sample Acquiring Bank",
+    "MaskedCardNumber": "411111******1111",
+    "Arn": "74500000000000000000001"
+  }
+}

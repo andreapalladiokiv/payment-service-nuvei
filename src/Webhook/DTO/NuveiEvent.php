@@ -26,6 +26,34 @@ final readonly class NuveiEvent
         return (string) ($this->payload['transactionType'] ?? '');
     }
 
+    /**
+     * The envelope's `EventType` — present on a **Control Panel event DMN** (a Chargeback, a
+     * Dispute API callback, an Ethoca alert) and absent from every payment DMN, which carries
+     * `transactionType` instead.
+     *
+     * The two are mutually exclusive in practice and that is why {@see EventParser} can treat this
+     * as a discriminator rather than a second field to reconcile: a delivery that carried both
+     * would be a shape neither channel documents.
+     */
+    public function eventType(): string
+    {
+        return (string) ($this->payload['EventType'] ?? '');
+    }
+
+    /**
+     * The envelope's `EventId`: Nuvei's own id for **this delivery**, and the half of an event
+     * DMN's external id that makes a redelivery recognisable.
+     *
+     * Not to be confused with `Chargeback.DisputeEventId`, which is the dispute suite's id for the
+     * same delivery and is what {@see DisputeSignal} names as the provider's key on the aggregate.
+     * They are two of Nuvei's ids for one thing; this one is the envelope's, so it exists for every
+     * event type while the other exists only for disputes.
+     */
+    public function eventId(): string
+    {
+        return (string) ($this->payload['EventId'] ?? '');
+    }
+
     public function status(): string
     {
         return (string) ($this->payload['Status'] ?? '');
@@ -147,7 +175,21 @@ final readonly class NuveiEvent
      */
     public function clientUniqueIdUuid(): string
     {
-        $raw = $this->clientUniqueId();
+        return self::uuidOfClientUniqueId($this->clientUniqueId());
+    }
+
+    /**
+     * The convention above, as a rule rather than a method — because the same string arrives at two
+     * different paths in two different DMN shapes: a payment DMN states it at the top level
+     * (`clientUniqueId`, which {@see clientUniqueIdUuid()} reads) while a Chargeback event DMN
+     * states it under `TransactionDetails.ClientUniqueId`.
+     *
+     * It is one rule, so it is one function: a second copy in a dispute DTO would be a second answer
+     * to "which aggregate is this", and the two would drift the first time the convention gained a
+     * third form.
+     */
+    public static function uuidOfClientUniqueId(string $raw): string
+    {
         $colon = strpos($raw, ':');
 
         return $colon === false ? $raw : substr($raw, 0, $colon);
@@ -155,13 +197,28 @@ final readonly class NuveiEvent
 
     private function parseMoney(string $raw): Money
     {
-        $code = $this->currency();
-        if ($code === '') {
+        return self::money($raw, $this->currency());
+    }
+
+    /**
+     * The rule every Nuvei amount follows, as a function — because the same rule reads two shapes:
+     * a payment DMN states its totals at the top level and a Chargeback event DMN states the
+     * disputed amount under `Chargeback`, and both are **major-unit decimal strings** parsed against
+     * the currency's ISO scale, so `"10.50"` is $10.50 and not ten cents and a half.
+     *
+     * `$currency` is taken rather than read, and an absent one is refused rather than assumed:
+     * picking a default silently mis-states the ledger, which is worse than a delivery that fails.
+     *
+     * @throws RuntimeException when no currency was named.
+     */
+    public static function money(string $raw, string $currency): Money
+    {
+        if ($currency === '') {
             throw new RuntimeException(
                 sprintf('Nuvei DMN names no currency; refusing to assume one for amount "%s".', $raw),
             );
         }
 
-        return new DecimalMoneyParser(new ISOCurrencies)->parse($raw, new Currency($code));
+        return new DecimalMoneyParser(new ISOCurrencies)->parse($raw, new Currency($currency));
     }
 }

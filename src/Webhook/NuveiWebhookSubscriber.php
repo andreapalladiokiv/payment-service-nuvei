@@ -6,6 +6,7 @@ namespace Techork\PaymentService\Nuvei\Webhook;
 
 use Override;
 use Techork\PaymentService\Nuvei\Webhook\Handler\AuthHandler;
+use Techork\PaymentService\Nuvei\Webhook\Handler\ChargebackHandler;
 use Techork\PaymentService\Nuvei\Webhook\Handler\CreditHandler;
 use Techork\PaymentService\Nuvei\Webhook\Handler\PaymentMethodCreationHandler;
 use Techork\PaymentService\Nuvei\Webhook\Handler\SaleHandler;
@@ -28,6 +29,7 @@ final readonly class NuveiWebhookSubscriber implements WebhookSubscriber
         private SettleHandler $settle,
         private CreditHandler $credit,
         private VoidHandler $void,
+        private ChargebackHandler $chargeback,
     ) {}
 
     #[Override]
@@ -41,5 +43,10 @@ final readonly class NuveiWebhookSubscriber implements WebhookSubscriber
         $handlers->register(self::KIND, EventParser::TYPE_SETTLE, $this->settle);
         $handlers->register(self::KIND, EventParser::TYPE_CREDIT, $this->credit);
         $handlers->register(self::KIND, EventParser::TYPE_VOID, $this->void);
+
+        // The one event-channel registration. Every other type here is a payment DMN's
+        // `transactionType`; this is a Control Panel event DMN's `EventType`, which is the field
+        // {@see EventParser} reads to tell the two channels apart.
+        $handlers->register(self::KIND, EventParser::TYPE_CHARGEBACK, $this->chargeback);
     }
 }
