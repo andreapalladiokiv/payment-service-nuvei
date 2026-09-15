@@ -8,8 +8,8 @@ use Nuvei\Api\Environment;
 use Nuvei\Api\RestClient;
 use Techork\PaymentService\Common\Contract\DecryptInterface;
 use Techork\PaymentService\Common\ValueObject\BillingAddress;
-use Techork\PaymentService\Common\ValueObject\CustomerId;
 use Techork\PaymentService\Common\ValueObject\Country;
+use Techork\PaymentService\Common\ValueObject\CustomerId;
 use Techork\PaymentService\Common\ValueObject\PaymentInitiation;
 use Techork\PaymentService\Common\ValueObject\ThreeDS\ThreeDSResult;
 use Techork\PaymentService\Common\ValueObject\ThreeDS\ThreeDSStatus;
@@ -23,14 +23,15 @@ use Techork\PaymentService\Gateway\Command\RefundCommand;
 use Techork\PaymentService\Gateway\Command\TerminateCardCommand;
 use Techork\PaymentService\Gateway\Command\UpdateCardCommand;
 use Techork\PaymentService\Gateway\Command\VaultCommand;
+use Techork\PaymentService\Gateway\Contract\Gateway;
 use Techork\PaymentService\Gateway\Contract\GatewayCustomerRepository;
 use Techork\PaymentService\Gateway\Contract\GatewayInstrumentRepository;
 use Techork\PaymentService\Gateway\Exception\IncompleteAuthentication;
+use Techork\PaymentService\Gateway\Exception\RegistrationNeedsCustomer;
 use Techork\PaymentService\Gateway\Exception\UnsupportedByGateway;
 use Techork\PaymentService\Gateway\Exception\UnsupportedInstrument;
 use Techork\PaymentService\Gateway\Exception\UnsupportedOperation;
 use Techork\PaymentService\Gateway\ValueObject\CardSpendCategory;
-use Techork\PaymentService\Gateway\Exception\RegistrationNeedsCustomer;
 use Techork\PaymentService\Gateway\ValueObject\GatewayId;
 use Techork\PaymentService\Gateway\ValueObject\GatewayInfrastructure;
 use Techork\PaymentService\Nuvei\NuveiGateway;
@@ -151,7 +152,7 @@ function nuveiFacadeVault(?CustomerId $customerId = null): VaultCommand
 function nuveiCardInvoke(NuveiGateway $gateway, string $operation): mixed
 {
     return match ($operation) {
-        'issueVirtualCard' => $gateway->issueVirtualCard(new IssueCardCommand(
+        'issueVirtualCard' => $gateway->issueVirtualCard(IssueCardCommand::saleFunded(
             gatewayId: GatewayId::generate(),
             transactionReference: 'sale-guid',
             amountLimit: new Money(1000, new Currency('USD')),
@@ -503,7 +504,7 @@ it('lets a payload it cannot build propagate instead of answering with a refusal
 /**
  * Nuvei is an acquirer and issues no cards, so all three card-issuing
  * operations are structurally impossible. They exist at all because
- * {@see \Techork\PaymentService\Gateway\Contract\Gateway} declares them and
+ * {@see Gateway} declares them and
  * the gateway stack calls them on whatever gateway it holds — undeclared,
  * each would be a fatal `Call to undefined method` instead of a refusal.
  *
@@ -660,7 +661,6 @@ it('registers no customer while taking a payment, whatever the address carries',
         // One call, the payment. A createUser would be a second.
         ->and($calls)->toHaveCount(1);
 });
-
 
 /**
  * Storing an instrument for later use is storing it for somebody, so registering refuses an
