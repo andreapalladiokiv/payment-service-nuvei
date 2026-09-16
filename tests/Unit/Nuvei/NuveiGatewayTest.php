@@ -53,9 +53,13 @@ use Techork\PaymentService\Nuvei\Tokenize;
  * produces, which is the only thing that proves the command reached it.
  *
  * A note on the `sessionToken` seeded into every gateway here. {@see NuveiGateway::configure()}
- * calls Nuvei's getSessionToken endpoint whenever real credentials are present and no token is set,
- * so seeding one keeps these tests offline. The one test that deliberately omits it also omits the
- * merchant id, exercising the guard that stops a bare gateway reaching the network.
+ * calls Nuvei's getSessionToken endpoint whenever a complete credential row carries no token, so
+ * seeding one keeps these tests offline. The tests that deliberately omit it hand over a row that
+ * is missing a credential, exercising the guard that stops an underconfigured gateway reaching the
+ * network.
+ *
+ * These defaults are also spelled the way the settings resolver prefers, which is why a facade test
+ * proves nothing about how a stored row resolves — {@see nuveiGatewayConfiguredWith()} is for that.
  *
  * @param  array<string, mixed>  $settings
  */
@@ -220,21 +224,72 @@ it('hands its configuration to the operations as one settings object', function 
 });
 
 /**
- * Without the merchant-id guard, configuring a gateway from a half-filled credential row would post
- * to Nuvei's getSessionToken endpoint with blank credentials. A null token afterwards is the
- * observable proof the guard held.
+ * A gateway configured from exactly the settings given, without {@see nuveiFacadeGateway()}'s
+ * camelCase defaults over the top.
+ *
+ * Those defaults are why this file stayed green while the site-id resolver was broken: every test
+ * here spelled the credentials the way {@see GatewayInfrastructure::setting()} prefers, so the
+ * spelling the applications actually store was never once executed. A test that wants to pin how a
+ * stored row resolves has to be the one that writes the row.
+ *
+ * @param  array<string, mixed>  $settings
  */
-it('does not fetch a session token while the credentials are still blank', function () {
+function nuveiGatewayConfiguredWith(array $settings): NuveiGateway
+{
     $gateway = new NuveiGateway;
+
     $gateway->configure(new GatewayInfrastructure(
         nuveiSuiteCredential(),
         Mockery::mock(DecryptInterface::class),
         nuveiSuiteInstruments(),
         Mockery::mock(GatewayCustomerRepository::class, ['find' => null]),
+        $settings,
     ));
 
-    expect($gateway->getSessionToken())->toBeNull();
-});
+    return $gateway;
+}
+
+/**
+ * The defect this pins. A stored row spells the site id `site_id`, which {@see
+ * GatewayInfrastructure::setting()} cannot reach from `merchantSiteId`: it pairs a camel key with
+ * its snake twin, and `site_id` is a different name rather than the same name in snake. The site id
+ * came back empty, and Nuvei refused the session-token request with "Invalid merchant site id".
+ *
+ * Every spelling is asserted against one expectation, because which one a row happens to use must
+ * not be observable in the configured gateway. Each row is otherwise a complete credential row, the
+ * shape production stores; the session token is seeded only to keep the assertion offline, since
+ * complete credentials are exactly what opens the branch that reaches the network.
+ */
+it('resolves the merchant site id under every spelling a stored row uses', function (string $key) {
+    $gateway = nuveiGatewayConfiguredWith([
+        'merchant_id' => 'mid-7',
+        $key => 'site-7',
+        'secret_key' => 'secret-7',
+        'sessionToken' => 'session-7',
+    ]);
+
+    expect($gateway->getMerchantSiteId())->toBe('site-7');
+})->with(['site_id', 'siteId', 'merchant_site_id', 'merchantSiteId']);
+
+/**
+ * Configuring from a half-filled credential row must not post to Nuvei's getSessionToken endpoint,
+ * and the row that matters most here is the one production had: every credential present except a
+ * site id the resolver could reach. The guard tested the merchant id, which resolved correctly, so
+ * that row passed it and the request went out with a blank `merchantSiteId`.
+ *
+ * A null token afterwards is the observable proof the guard held — nothing else about a request
+ * that was never made is visible, and one that was made would try to reach Nuvei rather than
+ * return.
+ */
+it('does not fetch a session token while any credential is still missing', function (array $settings) {
+    expect(nuveiGatewayConfiguredWith($settings)->getSessionToken())->toBeNull();
+})->with([
+    'nothing stored' => [[]],
+    'merchant id alone' => [['merchant_id' => 'mid-7']],
+    'no site id under any spelling' => [['merchant_id' => 'mid-7', 'secret_key' => 'secret-7']],
+    'no secret key' => [['merchant_id' => 'mid-7', 'site_id' => 'site-7']],
+    'no merchant id' => [['site_id' => 'site-7', 'secret_key' => 'secret-7']],
+]);
 
 // ──────────────────────────────────────────────
 //  which operation each role picks, and what reaches it

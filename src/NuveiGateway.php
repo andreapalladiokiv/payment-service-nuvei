@@ -98,13 +98,30 @@ final class NuveiGateway implements Gateway
      * `initialize()` with nothing, so every `new NuveiGateway` reached for a token with empty
      * creds until a guard was added. A gateway that is configured once, with real settings, has
      * no such moment.
+     *
+     * The merchant site id is asked for under a second name because stored rows spell it
+     * `site_id`, and that is not the snake form of anything. {@see
+     * GatewayInfrastructure::setting()} pairs a camel key with its snake twin, so it resolves
+     * `deviceGuid` against `device_guid` but can never reach a key that dropped the `merchant`
+     * prefix altogether. That spelling is the application's contract rather than an accident — its
+     * account validators and its admin UI write `site_id`, and its own consumers read it back —
+     * so an alias is what belongs here: renaming the stored key would survive until the next save
+     * through the admin. `siteId` is the name asked for, not `site_id`, because the alias then
+     * travels the same resolver as everything else; that pair IS an honest camel/snake one.
+     *
+     * The guard covers all three credentials rather than the merchant id alone. It used to test
+     * the one field that resolved correctly, so a row whose site id had gone missing passed it and
+     * Nuvei answered the session-token request with "Invalid merchant site id". Nuvei is the only
+     * driver that talks to the provider while configuring, which is why an unresolved key here
+     * becomes a thrown exception instead of a quietly empty property.
      */
     #[Override]
     public function configure(GatewayInfrastructure $infrastructure): void
     {
         $this->infrastructure = $infrastructure;
         $this->merchantId = $infrastructure->stringSetting('merchantId');
-        $this->merchantSiteId = $infrastructure->stringSetting('merchantSiteId');
+        $this->merchantSiteId = $infrastructure->stringSetting('merchantSiteId')
+            ?: $infrastructure->stringSetting('siteId');
         $this->secretKey = $infrastructure->stringSetting('secretKey');
         $this->environment = $infrastructure->stringSetting('environment', Environment::TEST);
 
@@ -118,7 +135,9 @@ final class NuveiGateway implements Gateway
             'merchantSecretKey' => $this->secretKey,
         ]);
 
-        if ($this->merchantId !== '' && $this->sessionToken === null) {
+        $configured = $this->merchantId !== '' && $this->merchantSiteId !== '' && $this->secretKey !== '';
+
+        if ($configured && $this->sessionToken === null) {
             $this->sessionToken = new NuveiCreditCardService($this->restClient)->getSessionToken();
         }
     }
